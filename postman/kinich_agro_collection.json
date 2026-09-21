@@ -1,0 +1,67 @@
+{
+  "info": {
+    "name": "Kinich-Agro",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Inject Crisis",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"crisis_type\": \"water_shortage\",\n  \"severity_percent\": 40,\n  \"affected_resources\": [\"water\"]\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/crisis",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "crisis"]
+        }
+      }
+    },
+    {
+      "name": "Get Scenarios",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:3000/api/scenarios",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "scenarios"]
+        }
+      }
+    },
+    {
+      "name": "Vote Scenario",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"scenario_id\": \"sc-1-human-focus\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/vote",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "vote"]
+        }
+      }
+    }
+  ]
+}

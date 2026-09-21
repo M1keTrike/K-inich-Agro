@@ -1,0 +1,63 @@
+{
+	"info": {
+		"_postman_id": "c6204c9e-5e75-4b13-8cfb-640f0c057cd4",
+		"name": "Kinich-Agro Genetic Engine",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Evolution Stream SSE",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Accept",
+						"value": "text/event-stream"
+					}
+				],
+				"url": {
+					"raw": "http://localhost:8000/api/evolution-stream?water_total_liters=1000&energy_total_kwh=100&num_inhabitants=100&cultivable_area_m2=50&w_human=0.4&w_crop=0.35&w_balance=0.25&emit_every_n=5",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"evolution-stream"
+					],
+					"query": [
+						{ "key": "water_total_liters", "value": "1000" },
+						{ "key": "energy_total_kwh", "value": "100" },
+						{ "key": "num_inhabitants", "value": "100" },
+						{ "key": "cultivable_area_m2", "value": "50" },
+						{ "key": "w_human", "value": "0.4" },
+						{ "key": "w_crop", "value": "0.35" },
+						{ "key": "w_balance", "value": "0.25" },
+						{ "key": "emit_every_n", "value": "5" }
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8000/health",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"health"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
