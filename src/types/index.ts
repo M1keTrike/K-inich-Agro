@@ -5,18 +5,26 @@ export interface ResourceDef {
 
 export interface RequirementDef {
   value: number;
-  max: number;
 }
 
 export interface ConsumerDef {
   requirements: Record<string, RequirementDef>;
   priority_weight: number;
+  subconsumers?: Record<string, ConsumerDef>;
+}
+
+export interface CrisisDef {
+  name: string;
+  description: string;
+  intensity: number;
+  impact_resource: Record<string, number>;
 }
 
 export interface DynamicTemplate {
   template_id: string;
   name: string;
   description: string;
+  crisis_factors: Record<string, CrisisDef>;
   resources: Record<string, ResourceDef>;
   consumers: Record<string, ConsumerDef>;
   population_size: number;
@@ -27,7 +35,7 @@ export interface DynamicTemplate {
 export interface ParetoScenario {
   scenario_id: string;
   label: string;
-  allocations: Record<string, Record<string, number>>;
+  allocations: Record<string, number>;
   fitness_score: number;
   pareto_rank: number;
 }

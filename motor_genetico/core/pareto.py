@@ -22,13 +22,15 @@ def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: 
     if len(front_indices) == 0:
         return _unavailable_scenarios(template, mapping)
 
+    # Decode genes to absolute allocations for the UI
+    from .genetic_algorithm import decode_to_absolute
+    abs_pop = decode_to_absolute(population, template, mapping)
+
     # Calculate distances to utopian point to find a balanced one
     utopian = np.max(front_objectives, axis=0)
     distances = np.linalg.norm(front_objectives - utopian, axis=1)
     
     # We want 3 distinct scenarios. We can pick max for Consumer 0, max for Consumer 1, and balanced.
-    # If there are not enough distinct consumers, just pick based on max fitness, min distance.
-    
     a_c1_idx = front_indices[np.argmax(front_objectives[:, 0])]
     a_c2_idx = front_indices[np.argmax(front_objectives[:, -1])] # Maximize last consumer
     a_balance_idx = front_indices[np.argmin(distances)]
@@ -42,26 +44,21 @@ def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: 
             if idx not in unique_indices:
                 unique_indices.append(idx)
                 break
-                
-    # Still < 3? Pad with unavailable
     
-    labels = ["Prioridad " + list(template.consumers.keys())[0].replace('_', ' ').title(), 
-              "Prioridad " + list(template.consumers.keys())[-1].replace('_', ' ').title(), 
-              "Balance Sistémico"]
+    labels = ["Prioridad " + mapping[0][0].replace('_', ' ').title(), 
+              "Prioridad " + mapping[-1][0].replace('_', ' ').title(), 
+              "Balance SistÃ©mico"]
 
     archetypes = []
     for i in range(3):
         if i < len(unique_indices):
             idx = unique_indices[i]
-            ind = population[idx]
+            ind = abs_pop[idx] # Use absolute allocations
             fit = fitness[idx]
             
             allocations = {}
-            for c_name in template.consumers.keys():
-                allocations[c_name] = {}
-            
-            for j, (c_name, r_name) in enumerate(mapping):
-                allocations[c_name][r_name] = float(ind[j])
+            for j, (node_path, r_name) in enumerate(mapping):
+                allocations[f"{node_path}.{r_name}"] = float(ind[j])
                 
             archetypes.append(ParetoScenario(
                 scenario_id=f"escenario_{i}",
@@ -76,9 +73,9 @@ def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: 
     return archetypes
 
 def _unavailable_scenario(template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> ParetoScenario:
-    allocations = {c: {} for c in template.consumers.keys()}
-    for c_name, r_name in mapping:
-        allocations[c_name][r_name] = 0.0
+    allocations = {}
+    for node_path, r_name in mapping:
+        allocations[f"{node_path}.{r_name}"] = 0.0
         
     return ParetoScenario(
         scenario_id="unavailable",
