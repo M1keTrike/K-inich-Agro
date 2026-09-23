@@ -1,9 +1,8 @@
 import numpy as np
-from typing import List, Dict
-from .schemas import ParetoScenario
+from typing import List, Dict, Tuple
+from .schemas import ParetoScenario, DynamicTemplate
 
 def pareto_front(objectives: np.ndarray) -> np.ndarray:
-    """Returns boolean mask of non-dominated points (maximization)."""
     n = len(objectives)
     is_efficient = np.ones(n, dtype=bool)
     for i in range(n):
@@ -14,91 +13,80 @@ def pareto_front(objectives: np.ndarray) -> np.ndarray:
             is_efficient[dominated] = False
     return is_efficient
 
-def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: np.ndarray) -> List[ParetoScenario]:
-    """
-    Extracts the Top-3 archetypes from the population.
-    If no viable solutions, returns "unavailable" scenarios.
-    """
-    viable_mask = fitness > 0
-    if not np.any(viable_mask):
-        return _unavailable_scenarios()
+def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: np.ndarray, template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> List[ParetoScenario]:
+    # Use all individuals, even if penalized, to ensure we always return a Pareto front (Rule 3)
+    is_efficient = pareto_front(objectives)
+    front_indices = np.where(is_efficient)[0]
+    front_objectives = objectives[is_efficient]
 
-    # Calculate Pareto front on viable individuals only
-    viable_indices = np.where(viable_mask)[0]
-    viable_objectives = objectives[viable_mask]
-    
-    is_efficient = pareto_front(viable_objectives)
-    front_indices = viable_indices[is_efficient]
-    front_objectives = viable_objectives[is_efficient]
+    if len(front_indices) == 0:
+        return _unavailable_scenarios(template, mapping)
 
-    # If the front is degenerate (less than 3 distinct solutions)
-    if len(front_indices) < 3:
-        # Fallback: just pick the best viable ones by fitness to pad out, 
-        # or return unavailable for the rest as per spec
-        pass # The logic below will handle choosing the same if they are identical, 
-             # but spec says "If the front produces less than 3 non-dominated solutions, 
-             # the missing archetypes are marked as unavailable".
-             # Let's see how many unique we have.
-        unique_front = np.unique(front_objectives, axis=0)
-        if len(unique_front) < 3:
-            return _unavailable_scenarios()
-
-    a_human_idx = front_indices[np.argmax(front_objectives[:, 0])]
-    a_crop_idx = front_indices[np.argmax(front_objectives[:, 1])]
-    
+    # Calculate distances to utopian point to find a balanced one
     utopian = np.max(front_objectives, axis=0)
     distances = np.linalg.norm(front_objectives - utopian, axis=1)
+    
+    # We want 3 distinct scenarios. We can pick max for Consumer 0, max for Consumer 1, and balanced.
+    # If there are not enough distinct consumers, just pick based on max fitness, min distance.
+    
+    a_c1_idx = front_indices[np.argmax(front_objectives[:, 0])]
+    a_c2_idx = front_indices[np.argmax(front_objectives[:, -1])] # Maximize last consumer
     a_balance_idx = front_indices[np.argmin(distances)]
 
-    # Check if they are distinct
-    chosen = set()
-    archetypes = []
+    indices_to_use = [a_c1_idx, a_c2_idx, a_balance_idx]
     
-    scenarios = [
-        ("human_priority", "Prioridad Humana", a_human_idx),
-        ("crop_viability", "Viabilidad de Cultivos", a_crop_idx),
-        ("balanced", "Supervivencia Equilibrada", a_balance_idx)
-    ]
+    # If they are not distinct enough, fill with random from front or best overall
+    unique_indices = list(set(indices_to_use))
+    while len(unique_indices) < 3 and len(unique_indices) < len(front_indices):
+        for idx in front_indices:
+            if idx not in unique_indices:
+                unique_indices.append(idx)
+                break
+                
+    # Still < 3? Pad with unavailable
+    
+    labels = ["Prioridad " + list(template.consumers.keys())[0].replace('_', ' ').title(), 
+              "Prioridad " + list(template.consumers.keys())[-1].replace('_', ' ').title(), 
+              "Balance Sistémico"]
 
-    for sc_id, label, idx in scenarios:
-        if idx in chosen:
-            # Degenerate case fallback
-            archetypes.append(_unavailable_scenario())
-            continue
-        
-        chosen.add(idx)
-        ind = population[idx]
-        fit = fitness[idx]
-        archetypes.append(ParetoScenario(
-            scenario_id=sc_id,
-            label=label,
-            water_liters_per_day=ind[0] + ind[1],
-            energy_kwh_per_day=ind[2] + ind[3],
-            water_human_liters=ind[0],
-            water_irrigation_liters=ind[1],
-            energy_habitat_kwh=ind[2],
-            energy_agro_kwh=ind[3],
-            fitness_score=fit,
-            pareto_rank=1
-        ))
-
-    # If some are unavailable but we have enough, we might want to fill them?
-    # Spec: "Si el Frente produce menos de 3 soluciones no dominadas, los arquetipos faltantes se marcan como null con scenario_id: 'unavailable'"
+    archetypes = []
+    for i in range(3):
+        if i < len(unique_indices):
+            idx = unique_indices[i]
+            ind = population[idx]
+            fit = fitness[idx]
+            
+            allocations = {}
+            for c_name in template.consumers.keys():
+                allocations[c_name] = {}
+            
+            for j, (c_name, r_name) in enumerate(mapping):
+                allocations[c_name][r_name] = float(ind[j])
+                
+            archetypes.append(ParetoScenario(
+                scenario_id=f"escenario_{i}",
+                label=labels[i] if i < len(labels) else f"Variante {i}",
+                allocations=allocations,
+                fitness_score=float(fit),
+                pareto_rank=1
+            ))
+        else:
+            archetypes.append(_unavailable_scenario(template, mapping))
+            
     return archetypes
 
-def _unavailable_scenario() -> ParetoScenario:
+def _unavailable_scenario(template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> ParetoScenario:
+    allocations = {c: {} for c in template.consumers.keys()}
+    for c_name, r_name in mapping:
+        allocations[c_name][r_name] = 0.0
+        
     return ParetoScenario(
         scenario_id="unavailable",
         label="No disponible",
-        water_liters_per_day=0.0,
-        energy_kwh_per_day=0.0,
-        water_human_liters=0.0,
-        water_irrigation_liters=0.0,
-        energy_habitat_kwh=0.0,
-        energy_agro_kwh=0.0,
+        allocations=allocations,
         fitness_score=0.0,
         pareto_rank=0
     )
 
-def _unavailable_scenarios() -> List[ParetoScenario]:
-    return [_unavailable_scenario() for _ in range(3)]
+def _unavailable_scenarios(template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> List[ParetoScenario]:
+    return [_unavailable_scenario(template, mapping) for _ in range(3)]

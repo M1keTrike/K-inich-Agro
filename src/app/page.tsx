@@ -1,141 +1,240 @@
 'use client';
-import { useState, useMemo } from 'react';
-import { StateIndicators } from '@/components/Dashboard/StateIndicators';
-import { CrisisForm } from '@/components/CrisisPanel/CrisisForm';
-import { ScenarioList } from '@/components/ScenarioComparator/ScenarioList';
-import { AlertBanner } from '@/components/ui/AlertBanner';
+import { useState, useEffect, useRef } from 'react';
 import { ConvergenceChart } from '@/components/GeneticEngine/ConvergenceChart';
-import { EvolutionStatus } from '@/components/GeneticEngine/EvolutionStatus';
-import { WeightSliders } from '@/components/GeneticEngine/WeightSliders';
-import { SystemState, Crisis, EvolutionParams, ParetoScenario } from '@/types';
-import { INITIAL_STATE } from '@/lib/mathEngine';
-import { useEvolutionStream } from '@/lib/geneticEngineClient';
+import { DynamicControls } from '@/components/GeneticEngine/DynamicControls';
+import { DynamicTemplate, EvolutionEvent } from '@/types';
 
-interface ActiveBanner {
-  crisisId: string;
-  title: string;
-  description: string;
-  severity: 'critical' | 'warning';
-}
+// Formateador simple para convertir llaves como WATER_LITERS a español "Water Liters"
+const formatLabel = (key: string) => {
+  return key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+};
+
+const translateToSpanish = (key: string) => {
+  const dictionary: Record<string, string> = {
+    WATER: 'Agua',
+    ENERGY: 'Energía',
+    O2: 'Oxígeno',
+    COOLING: 'Enfriamiento',
+    MAIN_ENERGY: 'Energía Principal',
+    BATTERIES: 'Baterías',
+    CLEAN_WATER: 'Agua Limpia',
+    BIOCIDES: 'Biocidas',
+    HABITAT: 'Hábitat',
+    CROPS: 'Cultivos',
+    SHIELDS: 'Escudos',
+    COMMS: 'Comunicaciones',
+    THERMAL_SEAL: 'Sello Térmico',
+    CREW_SURVIVAL: 'Superv. Tripulación',
+    LIFE_SUPPORT: 'Soporte Vital',
+    MANUFACTURING: 'Manufactura',
+    HYDROPONICS: 'Hidroponía',
+    QUARANTINE: 'Cuarentena',
+    CREW: 'Tripulación'
+  };
+  return dictionary[key] || formatLabel(key);
+};
 
 export default function Home() {
-  const [systemState, setSystemState] = useState<SystemState>(INITIAL_STATE);
-  const [banners, setBanners] = useState<ActiveBanner[]>([]);
+  const [templates, setTemplates] = useState<DynamicTemplate[]>([]);
+  const [activeTemplate, setActiveTemplate] = useState<DynamicTemplate | null>(null);
   
-  const [evolutionParams, setEvolutionParams] = useState<EvolutionParams>({
-    water_total_liters: INITIAL_STATE.water_liters,
-    energy_total_kwh: INITIAL_STATE.energy_watts, // simplifying units for now
-    num_inhabitants: 100, // example
-    cultivable_area_m2: 50, // example
-    w_human: 0.4,
-    w_crop: 0.35,
-    w_balance: 0.25,
-    emit_every_n: 5
-  });
+  const [data, setData] = useState<EvolutionEvent | null>(null);
+  const [history, setHistory] = useState<EvolutionEvent[]>([]);
+  
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { data: evolutionData, status: streamStatus, errorMsg } = useEvolutionStream(evolutionParams);
+  // 1. Fetch templates on mount
+  useEffect(() => {
+    fetch('http://localhost:8000/api/scenarios/templates')
+      .then(res => res.json())
+      .then((d: DynamicTemplate[]) => {
+        setTemplates(d);
+        if (d.length > 0) {
+          handleInject(d[0]);
+        }
+      })
+      .catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const lastEvent = evolutionData.length > 0 ? evolutionData[evolutionData.length - 1] : null;
-  const top3Scenarios = lastEvent?.top3 || [];
-
-  const handleCrisisInjected = async (crisis: Crisis) => {
-    setSystemState(prev => ({ ...prev, status: 'crisis_paused' }));
-
-    const severity: 'critical' | 'warning' = crisis.severity_percent >= 60 ? 'critical' : 'warning';
-    const newBanner: ActiveBanner = {
-      crisisId: `crisis-${Date.now()}`,
-      title: `Crisis detectada: ${crisis.crisis_type.replace(/_/g, ' ')}`,
-      description: `Severidad del ${crisis.severity_percent}% en recursos: ${crisis.affected_resources.join(', ')}. Se requiere votación de la asamblea.`,
-      severity,
-    };
-    setBanners(prev => [...prev, newBanner]);
-    
-    // Decrease resources based on severity to trigger evolution
-    const resourceReduction = 1 - (crisis.severity_percent / 100);
-    setEvolutionParams(prev => ({
-      ...prev,
-      water_total_liters: prev.water_total_liters * resourceReduction,
-      energy_total_kwh: prev.energy_total_kwh * resourceReduction
-    }));
-  };
-
-  const handleDismissBanner = (crisisId: string) => {
-    setBanners(prev => prev.filter(b => b.crisisId !== crisisId));
-  };
-
-  const handleVote = async (scenarioId: string) => {
-    const selected = top3Scenarios.find(s => s.scenario_id === scenarioId);
-    if (selected) {
-      setSystemState(prev => ({
-        ...prev,
-        status: 'normal',
-        water_liters: selected.water_liters_per_day,
-        energy_watts: selected.energy_kwh_per_day
-      }));
+  // 2. Connect to SSE
+  const connectSSE = () => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
     }
-    setBanners([]);
     
-    // Call vote API in background
-    fetch('/api/vote', {
+    // Reset history when starting a new stream
+    setHistory([]);
+    setData(null);
+
+    const eventSource = new EventSource('http://localhost:8000/api/evolution-stream');
+    eventSource.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data) as EvolutionEvent;
+        setData(parsed);
+        setHistory(prev => {
+          const newHistory = [...prev, parsed];
+          if (newHistory.length > 50) newHistory.shift();
+          return newHistory;
+        });
+        
+        if (parsed.is_final) {
+          eventSource.close();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    
+    eventSource.onerror = () => {
+      eventSource.close();
+    };
+    
+    eventSourceRef.current = eventSource;
+  };
+
+  // 3. Inject new template
+  const handleInject = (template: DynamicTemplate) => {
+    setActiveTemplate(template);
+    fetch('http://localhost:8000/api/scenarios/active', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scenario_id: scenarioId })
+      body: JSON.stringify(template)
+    }).then(() => {
+      connectSSE();
     }).catch(console.error);
   };
 
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans">
-      {banners.length > 0 && (
-        <div className="w-full px-6 pt-4 space-y-2">
-          {banners.map(banner => (
-            <AlertBanner
-              key={banner.crisisId}
-              crisisId={banner.crisisId}
-              title={banner.title}
-              description={banner.description}
-              severity={banner.severity}
-              onDismiss={() => handleDismissBanner(banner.crisisId)}
-            />
-          ))}
-        </div>
-      )}
+  // 4. Update template on the fly
+  const handleTemplateChange = (newTemplate: DynamicTemplate) => {
+    setActiveTemplate(newTemplate);
+    
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      fetch('http://localhost:8000/api/scenarios/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTemplate)
+      }).then(() => {
+        connectSSE(); // Restart evolution with new params
+      }).catch(console.error);
+    }, 500); // 500ms debounce
+  };
 
-      <div className="max-w-6xl mx-auto px-6 py-8">
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  if (!activeTemplate) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center font-sans">
+        <p className="text-slate-500 animate-pulse">Conectando con el Motor Genético N-Dimensional...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans p-6">
+      <div className="max-w-6xl mx-auto">
         <header className="mb-8 border-b border-gray-200 pb-5">
-          <h1 className="text-2xl font-bold text-slate-800">K&apos;inich-Gov</h1>
-          <p className="text-sm text-slate-500 mt-1">Gemelo digital de gobernanza comunitaria</p>
+          <h1 className="text-3xl font-bold text-slate-800">K&apos;inich-Agro: Entornos Dinámicos</h1>
+          <p className="text-sm text-slate-500 mt-1">Gobernanza Agnóstica - Generación: {data ? data.generation : 0}</p>
         </header>
 
-        <StateIndicators state={systemState} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          {/* Selector de Plantillas */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h2 className="text-xl font-semibold mb-4 text-slate-800">Inyectar Crisis</h2>
+            <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+              {templates.map(t => (
+                <div key={t.template_id} className={`p-4 border rounded-lg flex justify-between items-center transition ${activeTemplate.template_id === t.template_id ? 'bg-indigo-50 border-indigo-300' : 'bg-slate-50 border-slate-200'}`}>
+                  <div>
+                    <h3 className="font-medium text-slate-800">{t.name}</h3>
+                    <p className="text-xs text-slate-500">{t.description}</p>
+                  </div>
+                  <button 
+                    onClick={() => handleInject(t)}
+                    className="ml-4 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-md hover:bg-indigo-700 transition"
+                  >
+                    Inyectar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
 
-        <CrisisForm
-          onCrisisInjected={handleCrisisInjected}
-          disabled={systemState.status === 'crisis_paused'}
+          {/* Indicadores Dinámicos */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h2 className="text-xl font-semibold mb-4 text-slate-800">Estado de Recursos</h2>
+            <div className="space-y-4">
+              {Object.entries(activeTemplate.resources).map(([key, rDef]) => (
+                <div key={key}>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-sm font-medium text-slate-700">{translateToSpanish(key)}</span>
+                    <span className="text-sm text-slate-500">{rDef.value.toFixed(1)} / {rDef.max.toFixed(1)}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div 
+                      className="bg-emerald-500 h-2.5 rounded-full" 
+                      style={{ width: `${Math.min(100, Math.max(0, (rDef.value / rDef.max) * 100))}%` }}
+                    ></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        
+        {/* Controles Dinámicos */}
+        <DynamicControls 
+          template={activeTemplate} 
+          onChange={handleTemplateChange} 
+          disabled={false} 
         />
 
-        {systemState.status === 'crisis_paused' && (
-          <>
-            <WeightSliders 
-              params={evolutionParams} 
-              onChange={setEvolutionParams} 
-              disabled={streamStatus === 'connecting'} 
-            />
+        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-800">Convergencia Genética (Fitness)</h3>
+          </div>
+          <ConvergenceChart data={history} />
+        </div>
 
-            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-slate-800">Motor Genético SSE</h3>
-                <EvolutionStatus status={streamStatus} errorMsg={errorMsg} lastEvent={lastEvent} />
-              </div>
-              <ConvergenceChart data={evolutionData} />
+        {/* Proyecciones Pareto */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <h2 className="text-xl font-semibold mb-4 text-slate-800">Mejores soluciones</h2>
+          
+          {data && data.top3 && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              {data.top3.map((sc, idx) => (
+                <div key={idx} className="p-4 border border-indigo-100 bg-indigo-50/30 rounded-lg">
+                  <h3 className="font-semibold text-indigo-900 mb-2">{sc.label}</h3>
+                  {sc.scenario_id === "unavailable" ? (
+                    <p className="text-sm text-slate-500 italic">No disponible en esta generación.</p>
+                  ) : (
+                    <div>
+                      <p className="text-xs text-indigo-700 mb-2 font-medium">Fitness Score: {sc.fitness_score.toFixed(3)}</p>
+                      {Object.entries(sc.allocations).map(([cName, resAlloc]) => (
+                        <div key={cName} className="mb-2 bg-white/60 p-2 rounded border border-indigo-50">
+                          <p className="text-xs font-semibold text-slate-800 border-b border-indigo-100 pb-1 mb-1">{translateToSpanish(cName)}</p>
+                          {Object.entries(resAlloc).map(([rName, val]) => (
+                            <div key={rName} className="flex justify-between text-xs text-slate-600">
+                              <span>{translateToSpanish(rName)}:</span>
+                              <span className="font-medium">{val.toFixed(1)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
-
-            <ScenarioList
-              scenarios={top3Scenarios}
-              loading={streamStatus === 'connecting' || streamStatus === 'idle'}
-              onVote={handleVote}
-            />
-          </>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
