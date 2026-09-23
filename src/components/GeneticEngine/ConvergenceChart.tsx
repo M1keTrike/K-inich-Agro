@@ -32,7 +32,7 @@ export function ConvergenceChart({ data }: Props) {
             tick={{fontSize: 12}}
           />
           <Tooltip 
-            formatter={(value: number) => value.toFixed(3)}
+            formatter={(value: unknown) => typeof value === 'number' ? value.toFixed(3) : String(value)}
             labelFormatter={(label) => `Generación ${label}`}
           />
           <Legend verticalAlign="top" height={36}/>
