@@ -15,7 +15,12 @@ def build_gene_mapping(template: DynamicTemplate) -> List[Tuple[str, str]]:
     """Returns a list of (consumer_path, resource_name) for each gene."""
     return _build_mapping_recursive(template.consumers)
 
-def decode_to_absolute(genes: np.ndarray, template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> np.ndarray:
+def decode_to_absolute(
+    genes: np.ndarray,
+    template: DynamicTemplate,
+    mapping: List[Tuple[str, str]],
+    available_resources: Dict[str, np.ndarray] | None = None,
+) -> np.ndarray:
     """Decodes proportional [0,1] genes into absolute allocations using top-down hierarchical distribution."""
     pop_size = len(genes)
     abs_pop = np.zeros_like(genes)
@@ -29,7 +34,10 @@ def decode_to_absolute(genes: np.ndarray, template: DynamicTemplate, mapping: Li
             for crisis in template.crisis_factors.values():
                 if crisis.impact_resource and r_name in crisis.impact_resource:
                     total_impact += crisis.intensity * crisis.impact_resource[r_name]
-        resource_pools[r_name] = np.full(pop_size, max(0.0, base_val * (1.0 + total_impact)))
+        if available_resources is not None and r_name in available_resources:
+            resource_pools[r_name] = np.broadcast_to(available_resources[r_name], (pop_size,)).copy()
+        else:
+            resource_pools[r_name] = np.full(pop_size, max(0.0, base_val * (1.0 + total_impact)))
         
     def distribute(consumers: Dict[str, ConsumerDef], pools: Dict[str, np.ndarray], parent_path: str = ""):
         child_pools = {c_name: {} for c_name in consumers.keys()}
@@ -84,7 +92,7 @@ class GeneticAlgorithm:
     def _evaluate(self, pop: np.ndarray):
         from .fitness import evaluate_population
         abs_pop = decode_to_absolute(pop, self.template, self.mapping)
-        return evaluate_population(abs_pop, self.template, self.mapping)
+        return evaluate_population(abs_pop, self.template, self.mapping, gene_population=pop)
 
     def initialize_population(self):
         # Genes represent proportional allocation (0.0 to 1.0)

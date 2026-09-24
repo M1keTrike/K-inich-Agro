@@ -1,6 +1,29 @@
 import numpy as np
 from typing import Tuple, List, Dict, Any
 from .schemas import DynamicTemplate, ConsumerDef
+from .simulation import SimulationResult, simulate_population
+
+
+def _simulation_penalty(simulation: SimulationResult, template: DynamicTemplate) -> np.ndarray:
+    penalty = np.zeros(len(simulation.utility))
+    critical_demand = sum(
+        value.target_demand
+        for value in template.benefit_values.values()
+        if value.critical
+    )
+    minimum_reserve = sum(
+        value.minimum_reserve
+        for value in template.benefit_values.values()
+    )
+    total_demand = sum(value.target_demand for value in template.benefit_values.values())
+    if total_demand > 0:
+        penalty += (simulation.demand_deficit / total_demand) * 0.5
+    if critical_demand > 0:
+        penalty += (simulation.critical_deficit / critical_demand) * 2.0
+    if minimum_reserve > 0:
+        penalty += (simulation.reserve_violation / minimum_reserve) * 2.0
+    penalty += simulation.consumption_penalty
+    return penalty
 
 def _evaluate_node(
     consumers: Dict[str, ConsumerDef],
@@ -73,7 +96,12 @@ def _evaluate_node(
     return total_fitness, total_penalty, viable_mask, level_allocations
 
 
-def evaluate_population(population: np.ndarray, template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> Tuple[np.ndarray, np.ndarray]:
+def evaluate_population(
+    population: np.ndarray,
+    template: DynamicTemplate,
+    mapping: List[Tuple[str, str]],
+    gene_population: np.ndarray | None = None,
+) -> Tuple[np.ndarray, np.ndarray]:
     pop_size = len(population)
     
     # 1. Apply crisis factors to resources
@@ -108,8 +136,64 @@ def evaluate_population(population: np.ndarray, template: DynamicTemplate, mappi
             total_penalty += excess * 2.0
             viable_mask &= (alloc_sum <= 0)
 
+    if template.benefit_values:
+        simulation = simulate_population(population, template, mapping, gene_population)
+        total_penalty += _simulation_penalty(simulation, template)
+        total_fitness += simulation.utility
+        viable_mask &= ~simulation.infeasible
+
     fitness = total_fitness - total_penalty
+    # Hard safety and critical-demand violations are never rescued by utility.
+    if template.benefit_values:
+        fitness = np.where(viable_mask, fitness, -1_000_000.0 - total_penalty)
     return fitness, viable_mask
+
+
+def evaluate_fixed_preferences(template: DynamicTemplate, preferences: Dict[str, float]):
+    """Return a single auditable score for a complete global branch."""
+    from .genetic_algorithm import build_gene_mapping, decode_to_absolute
+
+    mapping = build_gene_mapping(template)
+    genes = np.zeros((1, len(mapping)))
+    for index, (path, resource) in enumerate(mapping):
+        genes[0, index] = min(1.0, max(0.0, preferences.get(f"{path}.{resource}", 0.0)))
+    fixed = decode_to_absolute(genes, template, mapping)
+    if not template.benefit_values:
+        scores, feasible = evaluate_population(fixed, template, mapping)
+        return float(scores[0]), bool(feasible[0]), {
+            "useful_benefits": {}, "demand_deficits": {}, "critical_deficits": {}, "reserve_violations": {}, "periods": []
+        }
+
+    simulation = simulate_population(fixed, template, mapping, gene_population=genes)
+    details = {
+        "useful_benefits": {name: float(values[0]) for name, values in simulation.useful_benefits.items()},
+        "demand_deficits": {
+            name: float(values[0]) for name, values in simulation.demand_deficits_by_resource.items()
+            if values[0] > 1e-8
+        },
+        "critical_deficits": {
+            name: float(values[0]) for name, values in simulation.critical_deficits_by_resource.items()
+        },
+        "demand_deficits": {
+            name: float(values[0]) for name, values in simulation.demand_deficits_by_resource.items()
+        },
+        "reserve_violations": {
+            name: float(values[0]) for name, values in simulation.reserve_violations_by_resource.items()
+            if values[0] > 1e-8
+        },
+        "periods": [
+            {
+                "period": index,
+                **{
+                    field: {name: float(values[0]) for name, values in snapshot[field].items()}
+                    for field in ("available_resources", "consumed_resources", "produced_resources", "useful_benefits", "critical_deficits", "ending_inventory")
+                },
+            }
+            for index, snapshot in enumerate(simulation.periods)
+        ],
+    }
+    fitness = float(simulation.utility[0] - _simulation_penalty(simulation, template)[0])
+    return fitness, not bool(simulation.infeasible[0]), details
 
 
 def _get_objectives_node(
@@ -149,7 +233,13 @@ def _get_objectives_node(
     return objs
 
 
-def get_objectives(population: np.ndarray, template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> np.ndarray:
+def get_objectives(
+    population: np.ndarray,
+    template: DynamicTemplate,
+    mapping: List[Tuple[str, str]],
+    gene_population: np.ndarray | None = None,
+    feasible_mask: np.ndarray | None = None,
+) -> np.ndarray:
     pop_size = len(population)
     
     # 1. Apply crisis factors to resources
@@ -177,6 +267,18 @@ def get_objectives(population: np.ndarray, template: DynamicTemplate, mapping: L
             
     # 3. Get objectives
     objs_list = _get_objectives_node(template.consumers, population, mapping)
+
+    if template.benefit_values:
+        simulation = simulate_population(population, template, mapping, gene_population)
+        for resource_name, value in template.benefit_values.items():
+            if value.unit_value > 0:
+                objs_list.append(
+                    simulation.useful_benefits[resource_name] * value.unit_value
+                )
+        for resource_name, consumed in simulation.total_consumed.items():
+            capacity = max(template.resources[resource_name].value * template.max_periods, 1.0)
+            objs_list.append(1.0 - np.minimum(1.0, consumed / capacity))
+        total_penalty += _simulation_penalty(simulation, template)
     
     if not objs_list:
         return np.zeros((pop_size, 1))
@@ -184,4 +286,6 @@ def get_objectives(population: np.ndarray, template: DynamicTemplate, mapping: L
     objs = np.column_stack(objs_list)
     # Apply penalty to all objectives
     objs = objs - total_penalty[:, np.newaxis]
+    if feasible_mask is not None:
+        objs[~feasible_mask] = -1_000_000.0
     return objs

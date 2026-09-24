@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinich-agro.local/contracts/benefit-template.schema.json",
+  "title": "Benefit aware DynamicTemplate",
+  "type": "object",
+  "required": ["template_id", "name", "description", "resources", "consumers"],
+  "properties": {
+    "template_id": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "resources": { "type": "object", "additionalProperties": { "type": "object", "required": ["value"], "properties": { "value": { "type": "number", "minimum": 0 } } } },
+    "benefit_values": { "type": "object", "additionalProperties": { "$ref": "#/$defs/benefit" } },
+    "max_periods": { "type": "integer", "minimum": 1, "maximum": 100, "default": 5 },
+    "consumers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/consumer" } }
+  },
+  "$defs": {
+    "benefit": {
+      "type": "object",
+      "required": ["unit_value"],
+      "properties": {
+        "unit_value": { "type": "number", "minimum": 0 },
+        "target_demand": { "type": "number", "minimum": 0, "default": 0 },
+        "critical": { "type": "boolean", "default": false },
+        "minimum_reserve": { "type": "number", "minimum": 0, "default": 0 },
+        "storage_capacity": { "type": ["number", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "required": ["amount_per_unit"],
+      "properties": {
+        "amount_per_unit": { "type": "number", "minimum": 0 },
+        "efficiency": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
+        "max_output": { "type": ["number", "null"], "minimum": 0 },
+        "available_after_periods": { "type": "integer", "minimum": 0, "default": 1 }
+      },
+      "additionalProperties": false
+    },
+    "consumer": {
+      "type": "object",
+      "required": ["priority_weight"],
+      "properties": {
+        "priority_weight": { "type": "number", "minimum": 0, "maximum": 1 },
+        "requirements": { "type": "object", "additionalProperties": { "type": "object", "required": ["value"], "properties": { "value": { "type": "number", "minimum": 0 } } } },
+        "outputs": { "type": "object", "additionalProperties": { "$ref": "#/$defs/output" } },
+        "subconsumers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/consumer" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

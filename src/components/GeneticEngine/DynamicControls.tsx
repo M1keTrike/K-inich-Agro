@@ -47,6 +47,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
   
   // Adding Requirement state inside Modal
   const [selectedReq, setSelectedReq] = useState("");
+  const [selectedOutput, setSelectedOutput] = useState("");
 
   useEffect(() => {
     setLocalTemplate(template);
@@ -166,6 +167,44 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
     target.requirements[selectedReq] = { value: baseVal * 0.1 };
     updateTemplate(newT);
     setSelectedReq("");
+  };
+
+  const handleAddOutput = () => {
+    if (!editingConsumerPath || !selectedOutput) return;
+    const newT = JSON.parse(JSON.stringify(localTemplate)) as DynamicTemplate;
+    const target = getConsumerByPath(newT.consumers, editingConsumerPath);
+    target.outputs = target.outputs || {};
+    target.outputs[selectedOutput] = {
+      amount_per_unit: 0,
+      efficiency: 1,
+      available_after_periods: 1,
+    };
+    if (!newT.benefit_values?.[selectedOutput]) {
+      newT.benefit_values = {
+        ...newT.benefit_values,
+        [selectedOutput]: { unit_value: 0, target_demand: 0, critical: false, minimum_reserve: 0 },
+      };
+    }
+    updateTemplate(newT);
+    setSelectedOutput("");
+  };
+
+  const handleUpdateOutput = (resourceName: string, key: 'amount_per_unit' | 'efficiency' | 'max_output' | 'available_after_periods', value: number | undefined) => {
+    if (!editingConsumerPath) return;
+    const newT = JSON.parse(JSON.stringify(localTemplate)) as DynamicTemplate;
+    const target = getConsumerByPath(newT.consumers, editingConsumerPath);
+    if (!target.outputs?.[resourceName]) return;
+    if (value === undefined) delete target.outputs[resourceName][key];
+    else target.outputs[resourceName][key] = value;
+    updateTemplate(newT);
+  };
+
+  const handleRemoveOutput = (resourceName: string) => {
+    if (!editingConsumerPath) return;
+    const newT = JSON.parse(JSON.stringify(localTemplate)) as DynamicTemplate;
+    const target = getConsumerByPath(newT.consumers, editingConsumerPath);
+    delete target.outputs?.[resourceName];
+    updateTemplate(newT);
   };
 
   const handleRemoveReqFromActive = (rName: string) => {
@@ -442,6 +481,48 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
                 <p className="text-xs text-slate-500 italic text-center py-4 bg-slate-50 rounded border border-slate-100 border-dashed">
                   No consume recursos directamente.
                 </p>
+              )}
+            </div>
+
+            {/* Producción */}
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold text-slate-800">Beneficios producidos</h4>
+                <div className="flex items-center gap-2">
+                  <select value={selectedOutput} onChange={event => setSelectedOutput(event.target.value)} className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs">
+                    <option value="">+ Añadir recurso...</option>
+                    {Object.keys(localTemplate.resources).filter(name => !activeConsumer.outputs?.[name]).map(name => <option key={name} value={name}>{translateToSpanish(name)}</option>)}
+                  </select>
+                  <button type="button" onClick={handleAddOutput} disabled={!selectedOutput} className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">Añadir</button>
+                </div>
+              </div>
+              {Object.entries(activeConsumer.outputs || {}).length === 0 ? (
+                <p className="rounded border border-dashed border-emerald-200 bg-white p-3 text-center text-xs italic text-slate-500">Este nodo no produce recursos.</p>
+              ) : (
+                <div className="space-y-3">
+                  {Object.entries(activeConsumer.outputs || {}).map(([resource, output]) => (
+                    <div key={resource} className="rounded-md border border-emerald-100 bg-white p-3">
+                      <div className="mb-2 flex items-center justify-between text-xs font-semibold text-emerald-900">
+                        {translateToSpanish(resource)}
+                        <button type="button" onClick={() => handleRemoveOutput(resource)} className="text-red-600">Quitar</button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                        {([
+                          ['amount_per_unit', 'Cantidad por operación'],
+                          ['efficiency', 'Eficiencia (0–1)'],
+                          ['max_output', 'Máximo por periodo'],
+                          ['available_after_periods', 'Disponible después de periodos'],
+                        ] as const).map(([key, label]) => (
+                          <label key={key} className="space-y-1 text-[10px] font-medium text-slate-600">
+                            {label}
+                            <input type="number" min="0" max={key === 'efficiency' ? 1 : undefined} step={key === 'available_after_periods' ? 1 : 'any'} value={output[key] ?? ''} placeholder={key === 'max_output' ? 'Sin límite' : '0'} onChange={event => handleUpdateOutput(resource, key, event.target.value === '' ? undefined : Math.min(key === 'efficiency' ? 1 : Infinity, Math.max(0, Number(event.target.value) || 0)))} className="w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+                          </label>
+                        ))}
+                      </div>
+                      {!localTemplate.benefit_values?.[resource] && <p className="mt-2 text-xs font-medium text-amber-700">Agrega la valoración y la demanda de este recurso en Configuración de beneficios.</p>}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 

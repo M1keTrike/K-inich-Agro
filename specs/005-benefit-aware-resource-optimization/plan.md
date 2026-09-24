@@ -1,3 +1,107 @@
+# Plan de implementación: Optimización basada en consumo y beneficios
+
+**Feature**: `005-benefit-aware-resource-optimization`
+**Branch**: `005-benefit-aware-resource-optimization`
+**Fecha**: 2026-09-24
+**Estado**: Plan de implementación integrado
+**Dependencias**: Feature 004 (entornos dinámicos), motor genético SSE existente y prioridades jerárquicas
+
+**Input**: Alcance definido inicialmente en este plan y formalizado en [spec.md](./spec.md). El script oficial de Spec Kit no resolvió la feature al inicio porque no existían `.specify/feature.json` ni `spec.md`; ambos artefactos ya se completaron manualmente a partir del diseño aprobado.
+
+## Resumen
+
+Extender la evaluación del motor genético para modelar producción útil, demanda, reservas críticas y disponibilidad de recursos a través de periodos. La implementación debe mantener compatibles las plantillas sin `outputs`, preservar el modo manual y el recorrido automático, y entregar razones auditables para inviabilidad, déficit y excedentes. La validación de dependencias ya existe parcialmente; el trabajo central es corregir y ampliar la semántica de simulación, conectarla a objetivos Pareto, contratos SSE y las interfaces.
+
+## Contexto técnico
+
+**Lenguajes/versiones**: Python (servicio FastAPI; versión de runtime por confirmar en infraestructura), TypeScript, React 18 y Next.js 14.2.35.
+
+**Dependencias principales**: FastAPI, Pydantic, NumPy, `sse-starlette`; Next.js, React y Recharts. Dependencias Python declaradas en `motor_genetico/requirements.txt`.
+
+**Persistencia**: Plantillas JSON en memoria/archivos del servicio y estado existente del frontend; esta feature no requiere una base de datos nueva. Confirmar almacenamiento duradero solo si se decide persistir configuración o historial como parte de `spec.md`.
+
+**Pruebas**: pytest y httpx para el motor/API/SSE. El repositorio no declara actualmente un runner de pruebas frontend en `package.json`; las pruebas de interfaz deben acordarse antes de asignar una herramienta nueva.
+
+**Plataforma**: Aplicación web Next.js y microservicio Python/FastAPI con SSE; frontend preparado para Vercel y servicio Python desplegado por separado.
+
+**Metas de rendimiento**: Mantener el objetivo existente de cálculo interactivo y emisión SSE fluida; fijar límites medibles de periodos, nodos, población y tamaño del payload en la especificación. El plan actual no inventa un presupuesto de latencia para la nueva simulación.
+
+**Restricciones**: El cálculo debe ser determinista y estructurado; el LLM no participa en la optimización. Nunca se consume producción antes de que esté disponible. Una solución insegura no puede ser aplicable. Las decisiones finales permanecen bajo aprobación de la asamblea.
+
+**Alcance**: Esquema de template, grafo de dependencias, simulación temporal, fitness/Pareto, endpoint SSE, editor y resultados locales/globales, compatibilidad y regresión.
+
+## Chequeo de constitución
+
+**Puerta inicial: aprobada con condiciones de diseño.**
+
+- **Soberanía de la Asamblea**: las soluciones se presentan para revisión; el sistema no aplica una decisión unilateralmente.
+- **Cálculo determinista obligatorio**: validación, simulación, fitness y Pareto se implementan en Python/NumPy, sin delegar matemáticas al LLM.
+- **Transparencia y anti-acaparamiento**: exponer por recurso y periodo inventario, consumo, producción útil, excedente, déficit y causa de inviabilidad.
+- **Infraestructura ágil**: conservar frontend Next.js y microservicio FastAPI independiente; no introducir un servicio adicional.
+- **Arquitectura orientada a APIs**: versionar/ documentar el contrato JSON y SSE y mantener ejemplos reproducibles en Postman cuando el endpoint cambie.
+
+**Condiciones para cerrar la puerta**: acordar en `spec.md` qué significa “periodo” y cuántos se simulan; definir si una reserva mínima se aplica al inventario inicial o a cada periodo; y resolver cómo se decide la cantidad operada por nodo, pues el genotipo actual representa asignaciones proporcionales de requisitos y no una decisión explícita de activar/desactivar procesos.
+
+## Estructura del proyecto
+
+```text
+specs/005-benefit-aware-resource-optimization/
+├── plan.md
+├── spec.md                 # Pendiente: formalizar el alcance antes de tasks
+├── research.md
+├── data-model.md
+├── quickstart.md
+├── contracts/
+│   ├── template.schema.json
+│   └── evolution-event.schema.json
+└── tasks.md                # Fase posterior, generado desde spec y diseño
+
+motor_genetico/
+├── api/evolution_stream.py
+├── core/
+│   ├── schemas.py
+│   ├── dependencies.py
+│   ├── simulation.py
+│   ├── fitness.py
+│   ├── pareto.py
+│   ├── genetic_algorithm.py
+│   └── templates.py
+└── tests/
+    ├── test_dependencies.py
+    ├── test_fitness.py
+    ├── test_pareto.py
+    ├── test_sse_stream.py
+    └── ...
+
+src/
+├── types/index.ts
+├── lib/geneticEngineClient.ts
+├── components/GeneticEngine/
+│   ├── DynamicControls.tsx
+│   └── ResourceLock.tsx
+└── app/page.tsx
+```
+
+**Decisión de estructura**: extender los módulos existentes del motor y frontend. No crear un segundo backend ni duplicar contratos; el detalle de simulación se agrega en `core/simulation.py` y se comparte mediante los esquemas Python/TypeScript y eventos SSE.
+
+## Investigación y decisiones cerradas
+
+- **Validación de ciclos**: conservar la validación topológica previa a la evolución que existe en `core/dependencies.py`; ampliar sus casos y garantizar una ruta de ciclo legible. Solo activar reglas de producción cuando el template declara outputs, preservando plantillas históricas.
+- **Modelo temporal**: adoptar periodos discretos con inventario disponible y producción programada para periodos futuros. La disponibilidad efectiva será `periodo_actual + available_after_periods`; aclarar el significado de cero en `spec.md` (disponible en el mismo periodo tras consumo o al inicio del periodo siguiente).
+- **Valoración**: limitar utilidad a demanda restante. El excedente solo se conserva dentro de capacidad de almacenamiento y recibe utilidad únicamente si cubre una demanda futura explícita; no atribuir valor por defecto al excedente.
+- **Compatibilidad**: sin `benefit_values`/outputs, conservar la ruta de fitness vigente; añadir campos opcionales con defaults que permitan leer los templates existentes.
+- **API/SSE**: mantener los campos actuales y agregar campos de desglose opcionales. Rechazar templates no válidos al activarlos antes de abrir el stream.
+- **Datos de pruebas**: agregar un escenario de ejemplo válido y otro cíclico a fixtures/templates de desarrollo, sin convertir datos de demostración en defaults de producción.
+
+## Estado verificado del código y brechas de diseño
+
+Ya existen `OutputDef`, `BenefitValueDef`, `ConsumerDef.outputs`, `DynamicTemplate.benefit_values`, un validador de dependencias invocado al activar template y un cálculo parcial de producción útil. Estos componentes son una base, no una implementación completa del alcance.
+
+La simulación actual suma producción sin inventario por periodo ni consumo de producción; ignora `available_after_periods` como calendario, y calcula reservas contra asignaciones iniciales agregadas. El fitness penaliza déficits/reservas, pero no hace inviables todos los déficits críticos ni devuelve un desglose por nodo/periodo. `get_objectives` agrega dimensiones de beneficios de forma parcial. Los eventos SSE no incluyen métricas temporales. El tipo TypeScript aún no declara `benefit_values`; el editor y los resultados no configuran ni explican producción. El recorrido automático en `src/app/page.tsx` acumula fitness local, por lo que debe recalcular las ramas completas con el modelo global.
+
+La validación de grafo actual relaciona productor con cualquier consumidor del mismo recurso y detecta ciclos entre nodos; la especificación debe confirmar cómo distinguir inventario inicial de producción y qué hacer ante varios productores del mismo recurso. El criterio “recurso producido sin definición de valor” debe ser consistente con recursos intermedios que habilitan otros nodos pero no son un beneficio final.
+
+---
 # Plan de Implementación: Optimización Basada en Consumo y Beneficios
 
 **Feature**: `005-benefit-aware-resource-optimization`  
@@ -273,6 +377,10 @@ El endpoint de activación deberá validar el grafo antes de aceptar el template
 - Reserva inválida.
 - Recurso producido sin definición de valor.
 
+### Evaluación de ramas globales
+
+El endpoint `POST /scenarios/evaluate` recibirá el template completo y las preferencias combinadas por `nodo.recurso`. Devolverá score global, factibilidad, beneficio útil, déficits y desglose por periodo. El recorrido automático debe llamar este endpoint después de cada expansión del beam; el score acumulado de ramas locales no es comparable y no debe usarse como fitness global.
+
 ### Eventos SSE
 
 Extender los eventos de evolución con información opcional:
@@ -283,6 +391,7 @@ Extender los eventos de evolución con información opcional:
 - `useful_benefits`.
 - `critical_deficits`.
 - `dependency_status`.
+- `consumed_resources` y `demand_deficits`.
 
 Los clientes antiguos deberán poder ignorar esos campos.
 

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinich-agro.local/contracts/evolution-event.schema.json",
+  "title": "Evolution SSE data payload",
+  "type": "object",
+  "required": ["generation", "avg_fitness", "max_fitness", "top3", "is_final", "viable_count"],
+  "properties": {
+    "generation": { "type": "integer", "minimum": 0 },
+    "avg_fitness": { "type": "number" },
+    "max_fitness": { "type": "number" },
+    "is_final": { "type": "boolean" },
+    "viable_count": { "type": "integer", "minimum": 0 },
+    "period": { "type": ["integer", "null"], "minimum": 0 },
+    "available_resources": { "$ref": "#/$defs/numberMap" },
+    "consumed_resources": { "$ref": "#/$defs/numberMap" },
+    "produced_resources": { "$ref": "#/$defs/numberMap" },
+    "useful_benefits": { "$ref": "#/$defs/numberMap" },
+    "demand_deficits": { "$ref": "#/$defs/numberMap" },
+    "critical_deficits": { "$ref": "#/$defs/numberMap" },
+    "reserve_violations": { "$ref": "#/$defs/numberMap" },
+    "dependency_status": { "type": "object", "additionalProperties": { "type": "string" } },
+    "top3": { "type": "array", "items": { "type": "object", "required": ["scenario_id", "label", "allocations", "fitness_score", "pareto_rank", "feasible"], "properties": { "scenario_id": { "type": "string" }, "label": { "type": "string" }, "allocations": { "$ref": "#/$defs/numberMap" }, "allocation_preferences": { "$ref": "#/$defs/numberMap" }, "fitness_score": { "type": "number" }, "pareto_rank": { "type": "integer" }, "feasible": { "type": "boolean" }, "useful_benefits": { "$ref": "#/$defs/numberMap" }, "demand_deficits": { "$ref": "#/$defs/numberMap" }, "critical_deficits": { "$ref": "#/$defs/numberMap" }, "reserve_violations": { "$ref": "#/$defs/numberMap" }, "periods": { "type": "array", "items": { "type": "object" } } } } }
+  },
+  "$defs": { "numberMap": { "type": "object", "additionalProperties": { "type": "number" } } }
+}

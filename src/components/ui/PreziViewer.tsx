@@ -300,7 +300,7 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
                 )}
                 
                 {/* Etiqueta de Base Seleccionada */}
-                {node.data?.hasBaseSelected && (
+                {node.data.data?.hasBaseSelected === true && (
                   <div className="absolute -top-2 -right-2 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full border-2 border-slate-900 shadow-md z-10">
                     ✓ BASE
                   </div>

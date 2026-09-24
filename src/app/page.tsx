@@ -1,5 +1,6 @@
 'use client';
 import { AlgorithmSettings } from '@/components/GeneticEngine/AlgorithmSettings';
+import { BenefitSettings } from '@/components/GeneticEngine/BenefitSettings';
 import { ConvergenceChart } from '@/components/GeneticEngine/ConvergenceChart';
 import { DynamicControls } from '@/components/GeneticEngine/DynamicControls';
 import { ResourceLock } from '@/components/GeneticEngine/ResourceLock';
@@ -10,6 +11,18 @@ import { Modal } from '@/components/ui/Modal';
 import { ConsumerDef, DynamicTemplate, EvolutionEvent, ParetoScenario } from '@/types';
 import { Archive, Settings2, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+
+const GENETIC_ENGINE_URL = (process.env.NEXT_PUBLIC_GENETIC_ENGINE_URL || 'http://localhost:8000').replace(/\/$/, '');
+const getApiErrorMessage = (body: { detail?: unknown }, fallback: string) => {
+  const detail = body.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail) && 'message' in detail && typeof detail.message === 'string') {
+    return detail.message;
+  }
+  if (Array.isArray(detail)) {
+    return detail.map(item => typeof item === 'object' && item !== null && 'msg' in item && typeof item.msg === 'string' ? item.msg : String(item)).join(' · ');
+  }
+  return fallback;
+};
 
 // Formateador simple para convertir llaves como WATER_LITERS a español "Water Liters"
 const formatLabel = (key: string) => {
@@ -105,7 +118,41 @@ interface GlobalScenario {
   fitness_score: number;
   template: DynamicTemplate;
   selections: Record<string, ParetoScenario>;
+  feasible: boolean;
+  useful_benefits: Record<string, number>;
+  demand_deficits: Record<string, number>;
+  critical_deficits: Record<string, number>;
+  reserve_violations: Record<string, number>;
+  periods: Array<Record<string, unknown>>;
 }
+
+const MetricMap = ({ label, values, className = '' }: { label: string; values?: Record<string, number>; className?: string }) => {
+  const entries = Object.entries(values || {}).filter(([, value]) => value > 0);
+  if (entries.length === 0) return null;
+  return <div className={`text-xs ${className}`}><strong>{label}: </strong>{entries.map(([key, value]) => `${translateToSpanish(key)} ${value.toFixed(2)}`).join(' · ')}</div>;
+};
+
+const PeriodBreakdown = ({ periods }: { periods: Array<Record<string, unknown>> }) => {
+  if (!periods.length) return null;
+  return (
+    <details className="mt-3 rounded-md border border-slate-200 bg-white p-2 text-xs">
+      <summary className="cursor-pointer font-semibold text-slate-700">Desglose por periodo ({periods.length})</summary>
+      <div className="mt-2 max-h-40 space-y-2 overflow-y-auto">
+        {periods.map((period, index) => {
+          const produced = (period.produced_resources || {}) as Record<string, number>;
+          const consumed = (period.consumed_resources || {}) as Record<string, number>;
+          const available = (period.available_resources || {}) as Record<string, number>;
+          return <div key={index} className="border-t border-slate-100 pt-2 text-slate-600">
+            <strong>Periodo {Number(period.period ?? index) + 1}</strong>
+            <div>Disponible: {Object.entries(available).map(([name, value]) => `${translateToSpanish(name)} ${value.toFixed(1)}`).join(' · ') || '—'}</div>
+            <div>Consumido: {Object.entries(consumed).map(([name, value]) => `${translateToSpanish(name)} ${value.toFixed(1)}`).join(' · ') || '—'}</div>
+            <div>Producido: {Object.entries(produced).map(([name, value]) => `${translateToSpanish(name)} ${value.toFixed(1)}`).join(' · ') || '—'}</div>
+          </div>;
+        })}
+      </div>
+    </details>
+  );
+};
 
 export default function Home() {
   const [activeTemplate, setActiveTemplate] = useState<DynamicTemplate | null>(null);
@@ -146,7 +193,7 @@ export default function Home() {
 
   // 1. Fetch templates on mount
   useEffect(() => {
-    fetch('http://localhost:8000/api/scenarios/templates')
+    fetch(`${GENETIC_ENGINE_URL}/api/scenarios/templates`)
       .then(res => res.json())
       .then((d: DynamicTemplate[]) => {
         if (d.length > 0) {
@@ -168,7 +215,7 @@ export default function Home() {
     setHistory([]);
     setData(null);
 
-    const eventSource = new EventSource('http://localhost:8000/api/evolution-stream');
+    const eventSource = new EventSource(`${GENETIC_ENGINE_URL}/api/evolution-stream`);
     eventSource.onmessage = (event) => {
       try {
         const parsed = JSON.parse(event.data) as EvolutionEvent;
@@ -212,15 +259,25 @@ export default function Home() {
     }
 
     // Si queremos aislarlo de forma segura, asignamos sus requerimientos como recursos disponibles
-    const subResources: Record<string, import('@/types').ResourceDef> = {};
+    const subResources: Record<string, import('@/types').ResourceDef> = { ...template.resources };
     for (const [reqName, reqDef] of Object.entries(currentConsumer.requirements || {})) {
       subResources[reqName] = { value: reqDef.value, max: reqDef.value };
     }
 
+    const scopedOutputs = new Set<string>();
+    const findOutputs = (consumers: Record<string, ConsumerDef>) => {
+      for (const consumer of Object.values(consumers)) {
+        Object.keys(consumer.outputs || {}).forEach(name => scopedOutputs.add(name));
+        if (consumer.subconsumers) findOutputs(consumer.subconsumers);
+      }
+    };
+    findOutputs(currentConsumer.subconsumers || {});
+
     return {
       ...template,
       resources: subResources,
-      consumers: currentConsumer.subconsumers || {}
+      consumers: currentConsumer.subconsumers || {},
+      benefit_values: Object.fromEntries(Object.entries(template.benefit_values || {}).filter(([name]) => scopedOutputs.has(name))),
     };
   };
 
@@ -265,21 +322,30 @@ export default function Home() {
       };
       restoreDemands(payloadTemplate.consumers);
 
-      fetch('http://localhost:8000/api/scenarios/active', {
+      fetch(`${GENETIC_ENGINE_URL}/api/scenarios/active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payloadTemplate)
-      }).then(() => {
+      }).then(async response => {
+        if (!response.ok) {
+          const result = await response.json() as { detail?: unknown };
+          throw new Error(getApiErrorMessage(result, 'La plantilla contiene un error de esquema, dependencia o reserva.'));
+        }
         connectSSE(); // Restart evolution with isolated scope
         resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }).catch(console.error);
+      }).catch(reason => setError(reason instanceof Error ? reason.message : 'No se pudo activar la plantilla.'));
     }, 500); // 500ms debounce
   };
 
   // 3. Update template on the fly
   const handleTemplateChange = (newTemplate: DynamicTemplate) => {
     setActiveTemplate(newTemplate);
-    // Don't auto-execute here either unless we want to invalidate caches. We'll just let it be.
+    setCache({});
+    setGlobalScenarios([]);
+    setData(null);
+    setHistory([]);
+    eventSourceRef.current?.close();
+    setError(null);
   };
 
   const handleFocusChange = (path: string[]) => {
@@ -294,7 +360,7 @@ export default function Home() {
   const progressPercent = Math.min(100, Math.round((configuredParents / totalParents) * 100));
 
   const [isSaving, setIsSaving] = useState(false);
-  const [activeSettingsModal, setActiveSettingsModal] = useState<'resources' | 'algorithm' | null>(null);
+  const [activeSettingsModal, setActiveSettingsModal] = useState<'resources' | 'benefits' | 'algorithm' | null>(null);
   const [isReportsModalOpen, setIsReportsModalOpen] = useState(false);
   const [isAutoRunning, setIsAutoRunning] = useState(false);
   const [autoProgress, setAutoProgress] = useState({ completed: 0, total: 0, node: 'Preparando recorrido' });
@@ -317,15 +383,45 @@ export default function Home() {
     return payloadTemplate;
   };
 
+  const evaluateGlobalBranch = async (template: DynamicTemplate, selections: Record<string, ParetoScenario>) => {
+    const preferences: Record<string, number> = {};
+    for (const [scope, scenario] of Object.entries(selections)) {
+      const prefix = scope ? `${scope}.` : '';
+      for (const [relativePath, preference] of Object.entries(scenario.allocation_preferences || {})) {
+        preferences[`${prefix}${relativePath}`] = preference;
+      }
+    }
+    const response = await fetch(`${GENETIC_ENGINE_URL}/api/scenarios/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template: buildPayloadTemplate(template), preferences }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(getApiErrorMessage(result, 'No se pudo evaluar la solución global.'));
+    return result as {
+      fitness_score: number;
+      feasible: boolean;
+      useful_benefits: Record<string, number>;
+      demand_deficits: Record<string, number>;
+      critical_deficits: Record<string, number>;
+      reserve_violations: Record<string, number>;
+      periods: Array<Record<string, unknown>>;
+    };
+  };
+
   const runEvolutionForTemplate = async (payloadTemplate: DynamicTemplate): Promise<EvolutionEvent> => {
-    await fetch('http://localhost:8000/api/scenarios/active', {
+    const activation = await fetch(`${GENETIC_ENGINE_URL}/api/scenarios/active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payloadTemplate)
     });
+    if (!activation.ok) {
+      const result = await activation.json() as { detail?: unknown };
+      throw new Error(getApiErrorMessage(result, 'La plantilla contiene un error de esquema, dependencia o reserva.'));
+    }
 
     return new Promise((resolve, reject) => {
-      const eventSource = new EventSource('http://localhost:8000/api/evolution-stream');
+      const eventSource = new EventSource(`${GENETIC_ENGINE_URL}/api/evolution-stream`);
       autoRejectRef.current = reject;
       eventSourceRef.current = eventSource;
 
@@ -387,10 +483,22 @@ export default function Home() {
         template: DynamicTemplate;
         selections: Record<string, ParetoScenario>;
         score: number;
+        feasible: boolean;
+        useful_benefits: Record<string, number>;
+        demand_deficits: Record<string, number>;
+        critical_deficits: Record<string, number>;
+        reserve_violations: Record<string, number>;
+        periods: Array<Record<string, unknown>>;
       }> = [{
         template: JSON.parse(JSON.stringify(activeTemplate)) as DynamicTemplate,
         selections: { ...cache },
         score: 0,
+        feasible: false,
+        useful_benefits: {},
+        demand_deficits: {},
+        critical_deficits: {},
+        reserve_violations: {},
+        periods: [],
       }];
 
       for (let index = 0; index < pending.length; index++) {
@@ -418,12 +526,21 @@ export default function Home() {
           const finalEvent = await runEvolutionForTemplate(buildPayloadTemplate(targetTemplate));
           if (autoStopRef.current) return;
 
-          const scenarios = finalEvent.top3.filter(item => item.scenario_id !== 'unavailable');
+          const scenarios = finalEvent.top3.filter(item => item.scenario_id !== 'unavailable' && item.feasible !== false);
           for (const scenario of scenarios) {
+            const selections = { ...branch.selections, [pathKey]: scenario };
+            const nextTemplate = applyScenarioToTemplate(branch.template, path, scenario);
+            const evaluation = await evaluateGlobalBranch(nextTemplate, selections);
             expandedBeam.push({
-              template: applyScenarioToTemplate(branch.template, path, scenario),
-              selections: { ...branch.selections, [pathKey]: scenario },
-              score: branch.score + scenario.fitness_score,
+              template: nextTemplate,
+              selections,
+              score: evaluation.fitness_score,
+              feasible: evaluation.feasible,
+              useful_benefits: evaluation.useful_benefits,
+              demand_deficits: evaluation.demand_deficits,
+              critical_deficits: evaluation.critical_deficits,
+              reserve_violations: evaluation.reserve_violations,
+              periods: evaluation.periods,
             });
           }
         }
@@ -442,12 +559,22 @@ export default function Home() {
         setAutoProgress({ completed: paths.length - pending.length + index + 1, total: paths.length, node: `${nodeName} · ${beam.length} recorridos` });
       }
 
-      setGlobalScenarios(beam.slice(0, 3).map((branch, index) => ({
+      const applicableBranches = beam.filter(branch => branch.feasible).slice(0, 3);
+      if (applicableBranches.length === 0) {
+        throw new Error('No se encontró una solución global que cubra las demandas críticas y respete las reservas.');
+      }
+      setGlobalScenarios(applicableBranches.map((branch, index) => ({
         scenario_id: `global_${index + 1}`,
         label: `Solución global ${index + 1}`,
         fitness_score: branch.score,
         template: branch.template,
         selections: branch.selections,
+        feasible: branch.feasible,
+        useful_benefits: branch.useful_benefits,
+        demand_deficits: branch.demand_deficits,
+        critical_deficits: branch.critical_deficits,
+        reserve_violations: branch.reserve_violations,
+        periods: branch.periods,
       })));
       setSuccessMessage('Recorrido automático completado. Se generaron las 3 mejores soluciones globales.');
       setTimeout(() => setSuccessMessage(null), 5000);
@@ -462,6 +589,7 @@ export default function Home() {
   };
 
   const handleApplyGlobalScenario = (scenario: GlobalScenario) => {
+    if (!scenario.feasible) return;
     const selectedTemplate = JSON.parse(JSON.stringify(scenario.template)) as DynamicTemplate;
     setActiveTemplate(selectedTemplate);
     setCache(scenario.selections);
@@ -491,7 +619,7 @@ export default function Home() {
       window.dispatchEvent(new Event('report-saved'));
 
       // Reset everything to start a new report
-      const res = await fetch('http://localhost:8000/api/scenarios/templates');
+      const res = await fetch(`${GENETIC_ENGINE_URL}/api/scenarios/templates`);
       const d = await res.json();
       if (d.length > 0) {
         setActiveTemplate(d[0]);
@@ -777,6 +905,15 @@ export default function Home() {
 
               <button
                 type="button"
+                onClick={() => setActiveSettingsModal('benefits')}
+                className="mt-3 flex w-full items-center justify-between rounded-xl border border-emerald-200 bg-white px-5 py-3 text-left text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50/40"
+              >
+                <span>Beneficios y reservas</span>
+                <span className="text-xs font-medium text-slate-500">{Object.keys(activeTemplate?.benefit_values || {}).length} definidos</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveSettingsModal('algorithm')}
                 disabled={isRunning}
                 className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-3 text-left text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 disabled:cursor-not-allowed disabled:opacity-60"
@@ -805,6 +942,21 @@ export default function Home() {
                   <span className="text-xs font-medium text-indigo-600">Evolucionando… generación {data?.generation}</span>
                 )}
               </div>
+              {data && activeTemplate?.benefit_values && Object.keys(activeTemplate.benefit_values).length > 0 && (
+                <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="mb-2 text-xs font-semibold text-slate-700">Resumen temporal · periodo {(data.period ?? 0) + 1}</p>
+                  <div className="space-y-1">
+                    <MetricMap label="Disponible" values={data.available_resources} />
+                    <MetricMap label="Consumido" values={data.consumed_resources} />
+                    <MetricMap label="Producido" values={data.produced_resources} className="text-emerald-700" />
+                    <MetricMap label="Beneficio útil" values={data.useful_benefits} className="text-emerald-700" />
+                    <MetricMap label="Demanda pendiente" values={data.demand_deficits} className="text-amber-700" />
+                    <MetricMap label="Déficit crítico" values={data.critical_deficits} className="text-amber-700" />
+                    <MetricMap label="Reserva incumplida" values={data.reserve_violations} className="text-red-700" />
+                  </div>
+                  {Object.keys(data.dependency_status || {}).length > 0 && <p className="mt-2 text-xs text-slate-600">Nodos productores: {Object.keys(data.dependency_status || {}).map(translateToSpanish).join(' · ')}</p>}
+                </div>
+              )}
 
               {!data && !currentAssigned && (
                 <div className="flex items-center justify-center h-48 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50 text-center px-4">
@@ -853,11 +1005,16 @@ export default function Home() {
                   {data.top3.map((sc, idx) => (
                     <div key={idx} className="p-4 border border-indigo-100 bg-indigo-50/40 rounded-xl flex flex-col min-w-0">
                       <h3 className="font-semibold text-indigo-900 mb-1">{sc.label}</h3>
-                      {sc.scenario_id === "unavailable" ? (
-                        <p className="text-sm text-slate-500 italic flex-1">Buscando soluciones viables...</p>
+                      {sc.scenario_id === "unavailable" || sc.feasible === false ? (
+                        <p className="text-sm text-amber-700 italic flex-1">No aplicable: revisa déficits críticos y reservas.</p>
                       ) : (
                         <div className="flex flex-col flex-1 h-full">
                           <p className="text-xs font-semibold text-indigo-600 mb-3">Fitness: {sc.fitness_score.toFixed(3)}</p>
+                          <MetricMap label="Beneficio útil" values={sc.useful_benefits} className="mb-1 text-emerald-700" />
+                          <MetricMap label="Demanda pendiente" values={sc.demand_deficits} className="mb-1 text-amber-700" />
+                          <MetricMap label="Déficit crítico" values={sc.critical_deficits} className="mb-1 text-amber-700" />
+                          <MetricMap label="Reserva incumplida" values={sc.reserve_violations} className="mb-2 text-red-700" />
+                          <PeriodBreakdown periods={sc.periods || []} />
                           <div className="bg-white p-3 rounded-lg border border-indigo-50 max-h-48 overflow-y-auto space-y-2 flex-grow mb-3">
                             {Object.entries(sc.allocations)
                               .filter(([pathStr]) => pathStr.split('.').length === 2) // Solo hijos inmediatos
@@ -909,6 +1066,7 @@ export default function Home() {
                   <p className="mt-1 text-sm text-slate-600">
                     Combinaciones completas generadas durante el recorrido automático.
                   </p>
+                  {globalScenarios.length < 3 && <p role="status" className="mt-2 text-xs font-medium text-amber-700">Las restricciones actuales dejan {globalScenarios.length} alternativa(s) global(es) factible(s), sin duplicar escenarios.</p>}
                 </div>
                 <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
                   Árbol completo
@@ -925,6 +1083,11 @@ export default function Home() {
                       </span>
                     </div>
 
+                    <MetricMap label="Beneficio útil" values={scenario.useful_benefits} className="mb-1 text-emerald-700" />
+                    <MetricMap label="Demanda pendiente" values={scenario.demand_deficits} className="mb-1 text-amber-700" />
+                    <MetricMap label="Déficit crítico" values={scenario.critical_deficits} className="mb-1 text-amber-700" />
+                    <MetricMap label="Reserva incumplida" values={scenario.reserve_violations} className="mb-2 text-red-700" />
+                    <PeriodBreakdown periods={scenario.periods} />
                     <div className="mb-4 max-h-40 space-y-2 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50 p-3">
                       {Object.entries(scenario.selections).map(([pathKey, selection]) => (
                         <div key={pathKey} className="flex items-start justify-between gap-2 border-b border-slate-200 pb-1 text-xs last:border-0 last:pb-0">
@@ -939,7 +1102,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => setSelectedGlobalScenario(scenario)}
-                      disabled={isAutoRunning}
+                      disabled={isAutoRunning || !scenario.feasible}
                       className="mt-auto w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Revisar solución
@@ -969,7 +1132,8 @@ export default function Home() {
             <button
               type="button"
               onClick={() => handleApplyGlobalScenario(selectedGlobalScenario)}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
+              disabled={!selectedGlobalScenario.feasible}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Aplicar esta solución
             </button>
@@ -985,6 +1149,11 @@ export default function Home() {
               <p className="mt-1 text-xs font-semibold text-emerald-700">
                 Fitness global: {selectedGlobalScenario.fitness_score.toFixed(3)}
               </p>
+              <MetricMap label="Beneficio útil" values={selectedGlobalScenario.useful_benefits} className="mt-2 text-emerald-800" />
+              <MetricMap label="Demanda pendiente" values={selectedGlobalScenario.demand_deficits} className="mt-1 text-amber-800" />
+              <MetricMap label="Déficit crítico" values={selectedGlobalScenario.critical_deficits} className="mt-1 text-amber-800" />
+              <MetricMap label="Reserva incumplida" values={selectedGlobalScenario.reserve_violations} className="mt-1 text-red-800" />
+              <PeriodBreakdown periods={selectedGlobalScenario.periods} />
             </div>
             <GlobalDraftPreview
               template={selectedGlobalScenario.template}
@@ -1004,6 +1173,14 @@ export default function Home() {
           onChange={handleTemplateChange}
           disabled={false}
         />
+      </Modal>
+
+      <Modal
+        isOpen={activeSettingsModal === 'benefits'}
+        onClose={() => setActiveSettingsModal(null)}
+        title="Beneficios, demandas y reservas"
+      >
+        {activeTemplate && <BenefitSettings template={activeTemplate} onChange={handleTemplateChange} />}
       </Modal>
 
       <Modal

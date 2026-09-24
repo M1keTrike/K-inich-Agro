@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinich-agro.local/contracts/evaluate-plan.schema.json",
+  "title": "Evaluate complete branch request",
+  "type": "object",
+  "required": ["template", "preferences"],
+  "properties": {
+    "template": { "$ref": "./template.schema.json" },
+    "preferences": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }, "description": "Map node.resource to a chromosome preference." }
+  },
+  "additionalProperties": false
+}

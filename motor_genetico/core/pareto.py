@@ -13,11 +13,22 @@ def pareto_front(objectives: np.ndarray) -> np.ndarray:
             is_efficient[dominated] = False
     return is_efficient
 
-def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: np.ndarray, template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> List[ParetoScenario]:
-    # Use all individuals, even if penalized, to ensure we always return a Pareto front (Rule 3)
-    is_efficient = pareto_front(objectives)
-    front_indices = np.where(is_efficient)[0]
-    front_objectives = objectives[is_efficient]
+def extract_archetypes(
+    population: np.ndarray,
+    fitness: np.ndarray,
+    objectives: np.ndarray,
+    template: DynamicTemplate,
+    mapping: List[Tuple[str, str]],
+    feasible_mask: np.ndarray | None = None,
+    simulation=None,
+) -> List[ParetoScenario]:
+    eligible = np.arange(len(population)) if feasible_mask is None else np.flatnonzero(feasible_mask)
+    if len(eligible) == 0:
+        return _unavailable_scenarios(template, mapping)
+    eligible_objectives = objectives[eligible]
+    front_mask = pareto_front(eligible_objectives)
+    front_indices = eligible[front_mask]
+    front_objectives = eligible_objectives[front_mask]
 
     if len(front_indices) == 0:
         return _unavailable_scenarios(template, mapping)
@@ -30,23 +41,22 @@ def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: 
     utopian = np.max(front_objectives, axis=0)
     distances = np.linalg.norm(front_objectives - utopian, axis=1)
     
-    # We want 3 distinct scenarios. We can pick max for Consumer 0, max for Consumer 1, and balanced.
-    a_c1_idx = front_indices[np.argmax(front_objectives[:, 0])]
-    a_c2_idx = front_indices[np.argmax(front_objectives[:, -1])] # Maximize last consumer
-    a_balance_idx = front_indices[np.argmin(distances)]
-
-    indices_to_use = [a_c1_idx, a_c2_idx, a_balance_idx]
+    candidates = [
+        int(front_indices[np.argmax(front_objectives[:, 0])]),
+        int(front_indices[np.argmax(front_objectives[:, -1])]),
+        int(front_indices[np.argmin(distances)]),
+    ]
+    unique_indices: List[int] = []
+    for index in candidates + [int(item) for item in front_indices]:
+        if index not in unique_indices:
+            unique_indices.append(index)
+        if len(unique_indices) == 3:
+            break
     
-    # If they are not distinct enough, fill with random from front or best overall
-    unique_indices = list(set(indices_to_use))
-    while len(unique_indices) < 3 and len(unique_indices) < len(front_indices):
-        for idx in front_indices:
-            if idx not in unique_indices:
-                unique_indices.append(idx)
-                break
-    
-    labels = ["Prioridad " + mapping[0][0].replace('_', ' ').title(), 
-              "Prioridad " + mapping[-1][0].replace('_', ' ').title(), 
+    first_label = mapping[0][0].replace('_', ' ').title() if mapping else "Producción"
+    last_label = mapping[-1][0].replace('_', ' ').title() if mapping else "Producción"
+    labels = ["Prioridad " + first_label,
+              "Prioridad " + last_label,
               "Balance SistÃ©mico"]
 
     archetypes = []
@@ -57,15 +67,47 @@ def extract_archetypes(population: np.ndarray, fitness: np.ndarray, objectives: 
             fit = fitness[idx]
             
             allocations = {}
+            allocation_preferences = {}
             for j, (node_path, r_name) in enumerate(mapping):
                 allocations[f"{node_path}.{r_name}"] = float(ind[j])
+                allocation_preferences[f"{node_path}.{r_name}"] = float(population[idx, j])
                 
             archetypes.append(ParetoScenario(
                 scenario_id=f"escenario_{i}",
                 label=labels[i] if i < len(labels) else f"Variante {i}",
                 allocations=allocations,
+                allocation_preferences=allocation_preferences,
                 fitness_score=float(fit),
-                pareto_rank=1
+                pareto_rank=1,
+                feasible=True,
+                useful_benefits={
+                    name: float(values[idx])
+                    for name, values in (simulation.useful_benefits.items() if simulation else [])
+                },
+                demand_deficits={
+                    name: float(values[idx])
+                    for name, values in (simulation.demand_deficits_by_resource.items() if simulation else [])
+                    if values[idx] > 1e-8
+                },
+                critical_deficits={
+                    name: float(values[idx])
+                    for name, values in (simulation.critical_deficits_by_resource.items() if simulation else [])
+                },
+                reserve_violations={
+                    name: float(values[idx])
+                    for name, values in (simulation.reserve_violations_by_resource.items() if simulation else [])
+                    if values[idx] > 1e-8
+                },
+                periods=[
+                    {
+                        "period": period_index,
+                        **{
+                            field: {name: float(values[idx]) for name, values in snapshot[field].items()}
+                            for field in ("available_resources", "consumed_resources", "produced_resources", "useful_benefits", "critical_deficits", "ending_inventory")
+                        },
+                    }
+                    for period_index, snapshot in enumerate(simulation.periods)
+                ] if simulation else [],
             ))
         else:
             archetypes.append(_unavailable_scenario(template, mapping))
@@ -82,7 +124,8 @@ def _unavailable_scenario(template: DynamicTemplate, mapping: List[Tuple[str, st
         label="No disponible",
         allocations=allocations,
         fitness_score=0.0,
-        pareto_rank=0
+        pareto_rank=0,
+        feasible=False,
     )
 
 def _unavailable_scenarios(template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> List[ParetoScenario]:
