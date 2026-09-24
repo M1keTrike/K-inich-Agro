@@ -55,11 +55,21 @@ function TreeNode({ name, def, path, configuredPaths }: TreeNodeProps) {
           {/* Requerimientos (Recursos Asignados a este nodo por su padre) */}
           {isParentConfigured && requirementsCount > 0 ? (
             <div className="flex flex-wrap gap-2 mb-2">
-              {Object.entries(def.requirements!).map(([rName, rDef]) => (
-                <span key={rName} className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium shadow-sm">
-                  {translateToSpanish(rName)}: {Math.round(rDef.value)}
-                </span>
-              ))}
+              {Object.entries(def.requirements!).map(([rName, rDef]) => {
+                const isDeficit = rDef.original_demand !== undefined && Math.round(rDef.value) < Math.round(rDef.original_demand);
+                if (isDeficit) {
+                  return (
+                    <span key={rName} className="text-xs bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded-full font-bold shadow-sm flex items-center gap-1" title="Recibió menos de lo solicitado">
+                      ⚠️ {translateToSpanish(rName)}: {Math.round(rDef.value)} / {Math.round(rDef.original_demand!)}
+                    </span>
+                  );
+                }
+                return (
+                  <span key={rName} className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium shadow-sm">
+                    {translateToSpanish(rName)}: {Math.round(rDef.value)}
+                  </span>
+                );
+              })}
             </div>
           ) : (
             <div className="text-[10px] text-slate-400 italic mb-2">Sin recursos asignados (esperando al padre)</div>

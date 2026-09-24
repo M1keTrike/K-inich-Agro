@@ -131,6 +131,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
     const newT = JSON.parse(JSON.stringify(localTemplate));
     const target = getConsumerByPath(newT.consumers, editingConsumerPath);
     target.requirements[rName].value = val;
+    target.requirements[rName].original_demand = val;
     updateTemplate(newT);
   };
 
@@ -190,13 +191,23 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
           // Preview allocation from genetic algorithm
           const resMap = Object.keys(cDef.requirements || {}).map(r => {
              const key = `${path.join('.')}.${r}`;
-             return `${translateToSpanish(r)}:${Math.round(allocations[key] || 0)}`;
+             const val = Math.round(allocations[key] || 0);
+             const demand = cDef.requirements![r].original_demand ?? cDef.requirements![r].value;
+             if (val < Math.round(demand)) {
+                 return `⚠️${translateToSpanish(r)}:${val}/${Math.round(demand)}`;
+             }
+             return `${translateToSpanish(r)}:${val}`;
           });
           if (resMap.length > 0) allocStr = " | Pre-Asignado: " + resMap.join(', ');
         } else {
           // Show current actual requirements
           const resMap = Object.keys(cDef.requirements || {}).map(r => {
-             return `${translateToSpanish(r)}:${Math.round(cDef.requirements![r].value)}`;
+             const val = Math.round(cDef.requirements![r].value);
+             const demand = cDef.requirements![r].original_demand;
+             if (demand !== undefined && val < Math.round(demand)) {
+                 return `⚠️${translateToSpanish(r)}:${val}/${Math.round(demand)}`;
+             }
+             return `${translateToSpanish(r)}:${val}`;
           });
           if (resMap.length > 0) allocStr = " | Base: " + resMap.join(', ');
         }
@@ -398,7 +409,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
                         type="number"
                         min="0"
                         step="1"
-                        value={req.value}
+                        value={req.original_demand ?? req.value}
                         onChange={(e) => handleUpdateActiveReq(rName, parseFloat(e.target.value))}
                         className="flex-1 text-sm border border-slate-200 rounded px-2 py-1 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
                       />

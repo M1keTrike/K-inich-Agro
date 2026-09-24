@@ -177,10 +177,26 @@ export default function Home() {
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
+      // Restore true demands for the GA
+      const payloadTemplate = JSON.parse(JSON.stringify(targetTemplate)) as DynamicTemplate;
+      const restoreDemands = (consumers: Record<string, ConsumerDef>) => {
+         for (const cDef of Object.values(consumers)) {
+            if (cDef.requirements) {
+               for (const req of Object.values(cDef.requirements)) {
+                  if (req.original_demand !== undefined) {
+                     req.value = req.original_demand;
+                  }
+               }
+            }
+            if (cDef.subconsumers) restoreDemands(cDef.subconsumers);
+         }
+      };
+      restoreDemands(payloadTemplate.consumers);
+
       fetch('http://localhost:8000/api/scenarios/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(targetTemplate)
+        body: JSON.stringify(payloadTemplate)
       }).then(() => {
         connectSSE(); // Restart evolution with isolated scope
       }).catch(console.error);
@@ -285,11 +301,14 @@ export default function Home() {
              if (!currentConsumers[childName].requirements) {
                  currentConsumers[childName].requirements = {};
              }
-             // Si el requerimiento existe, actualiza su valor. Si no, lo crea.
+             // Si el requerimiento existe, guarda su demanda original y actualiza el valor asignado
              if (currentConsumers[childName].requirements[resourceName]) {
+                 if (currentConsumers[childName].requirements[resourceName].original_demand === undefined) {
+                     currentConsumers[childName].requirements[resourceName].original_demand = currentConsumers[childName].requirements[resourceName].value;
+                 }
                  currentConsumers[childName].requirements[resourceName].value = val;
              } else {
-                 currentConsumers[childName].requirements[resourceName] = { value: val };
+                 currentConsumers[childName].requirements[resourceName] = { value: val, original_demand: val };
              }
          }
       }
