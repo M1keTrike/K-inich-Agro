@@ -1,10 +1,10 @@
 'use client';
 
-import { DynamicTemplate, ConsumerDef } from '@/types';
-import { useState, useEffect } from 'react';
+import { ConsumerDef, DynamicTemplate } from '@/types';
+import { Plus, Trash2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Modal } from '../ui/Modal';
-import { Trash2, Plus, X } from 'lucide-react';
-import { PreziViewer, PreziNodeData } from '../ui/PreziViewer';
+import { PreziNodeData, PreziViewer } from '../ui/PreziViewer';
 
 const formatLabel = (key: string) => {
   return key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
@@ -78,6 +78,19 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
 
   // Contextual actions for the currently editing consumer
   const activeConsumer = editingConsumerPath ? getConsumerByPath(localTemplate.consumers, editingConsumerPath) : null;
+
+  const getEffectivePriority = (path: string[]) => {
+    let consumers = localTemplate.consumers;
+    let effectivePriority = 1;
+    for (const name of path) {
+      const consumer = consumers[name];
+      effectivePriority *= consumer.priority_weight;
+      consumers = consumer.subconsumers || {};
+    }
+    return effectivePriority;
+  };
+
+  const activeEffectivePriority = editingConsumerPath ? getEffectivePriority(editingConsumerPath) : 0;
   
   // Calculate which resources are available to be added as requirements
   let availableResources: string[] = [];
@@ -242,7 +255,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
 
   return (
     <>
-      <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mt-8 mb-8">
+      <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm ">
         
         {/* Administrador de Colonia (Consumidores) */}
         <div>
@@ -356,7 +369,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
             {/* Prioridad */}
             <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
               <div className="flex justify-between items-center mb-2">
-                <h4 className="text-sm font-semibold text-slate-800">Prioridad Estratégica</h4>
+                <h4 className="text-sm font-semibold text-slate-800">Prioridad local</h4>
                 <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100">
                   {(activeConsumer.priority_weight * 100).toFixed(0)}%
                 </span>
@@ -370,7 +383,10 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
                 onChange={(e) => handleUpdateActiveWeight(parseFloat(e.target.value))}
                 className="w-full accent-indigo-600"
               />
-              <p className="text-[10px] text-slate-500 mt-2">Determina el peso de este nodo frente a otros al competir por recursos limitados.</p>
+              <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-slate-500">
+                <span>Define su peso frente a sus hermanos.</span>
+                <span className="font-semibold text-indigo-700">Efectiva: {(activeEffectivePriority * 100).toFixed(0)}%</span>
+              </div>
             </div>
 
             {/* Requerimientos */}

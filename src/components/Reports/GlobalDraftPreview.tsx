@@ -94,7 +94,7 @@ function TreeNode({ name, def, path, configuredPaths }: TreeNodeProps) {
 export function GlobalDraftPreview({ template, configuredPaths }: { template: DynamicTemplate, configuredPaths: string[] }) {
   const isRootConfigured = configuredPaths.includes("");
   return (
-    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm mb-6">
+    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
       <h3 className="text-lg font-semibold text-slate-800 mb-2 border-b pb-2">Borrador Global en Progreso</h3>
       <p className="text-xs text-slate-500 mb-4">
         Este árbol representa el estado actual de tu repartición. Los nodos con <CheckCircle2 className="w-3 h-3 inline text-indigo-500"/> ya han repartido sus recursos a sus hijos.

@@ -1,7 +1,7 @@
 'use client';
 
+import { ChevronRight, FileText, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { FileText, ChevronRight, X } from 'lucide-react';
 
 interface Report {
   id: string;
@@ -42,7 +42,7 @@ export function DistributionReportsViewer() {
 
   if (loading && reports.length === 0) {
     return (
-      <div className="mb-8 p-6 bg-white rounded-xl border border-slate-200 shadow-sm animate-pulse">
+      <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm animate-pulse">
          <div className="h-6 bg-slate-200 rounded w-48 mb-4"></div>
          <div className="flex gap-4">
            <div className="h-24 bg-slate-200 rounded-xl w-64"></div>

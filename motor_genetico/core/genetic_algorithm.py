@@ -70,6 +70,11 @@ class GeneticAlgorithm:
     def __init__(self, template: DynamicTemplate):
         self.template = template
         self.pop_size = template.population_size
+        self.mutation_rate = template.mutation_rate
+        self.mutation_strength = template.mutation_strength
+        self.crossover_rate = template.crossover_rate
+        self.elitism_count = min(template.elitism_count, max(1, self.pop_size - 1))
+        self.tournament_size = min(template.tournament_size, self.pop_size)
         self.mapping = build_gene_mapping(template)
         self.num_genes = len(self.mapping)
         self.population = np.zeros((self.pop_size, self.num_genes))
@@ -89,12 +94,12 @@ class GeneticAlgorithm:
     def evolve_one_generation(self):
         new_population = np.zeros_like(self.population)
         
-        # Elitism
-        best_idx = np.argmax(self.fitness)
-        new_population[0] = self.population[best_idx]
+        # Preserve the configured number of strongest individuals.
+        elite_indices = np.argsort(self.fitness)[-self.elitism_count:][::-1]
+        new_population[:self.elitism_count] = self.population[elite_indices]
         
         # Fill the rest
-        for i in range(1, self.pop_size):
+        for i in range(self.elitism_count, self.pop_size):
             p1 = self._tournament_select()
             p2 = self._tournament_select()
             child = self._crossover(self.population[p1], self.population[p2])
@@ -105,19 +110,19 @@ class GeneticAlgorithm:
         self.fitness, self.viable_mask = self._evaluate(self.population)
         self.generation += 1
 
-    def _tournament_select(self, k=2) -> int:
-        idx = np.random.choice(self.pop_size, k, replace=False)
+    def _tournament_select(self) -> int:
+        idx = np.random.choice(self.pop_size, self.tournament_size, replace=False)
         return idx[np.argmax(self.fitness[idx])]
 
     def _crossover(self, p1: np.ndarray, p2: np.ndarray) -> np.ndarray:
+        if np.random.random() > self.crossover_rate:
+            return p1.copy()
         alpha = np.random.uniform(0, 1)
         return alpha * p1 + (1 - alpha) * p2
 
     def _mutate(self, ind: np.ndarray) -> np.ndarray:
-        prob = 0.1
-        if np.random.random() < prob:
-            # Mutate proportional genes slightly
-            ind += np.random.normal(0, 0.1, self.num_genes)
+        if np.random.random() < self.mutation_rate:
+            ind += np.random.normal(0, self.mutation_strength, self.num_genes)
             ind = np.clip(ind, 0.0, 1.0)
         return ind
 

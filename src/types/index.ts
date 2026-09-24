@@ -31,6 +31,11 @@ export interface DynamicTemplate {
   population_size: number;
   max_generations: number;
   emit_every_n: number;
+  mutation_rate: number;
+  mutation_strength: number;
+  crossover_rate: number;
+  elitism_count: number;
+  tournament_size: number;
 }
 
 export interface ParetoScenario {

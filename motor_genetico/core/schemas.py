@@ -9,7 +9,7 @@ class RequirementDef(BaseModel):
 
 class ConsumerDef(BaseModel):
     requirements: Dict[str, RequirementDef] = Field(default_factory=dict)
-    priority_weight: float = Field(..., ge=0.0)
+    priority_weight: float = Field(..., ge=0.0, le=1.0)
     subconsumers: Dict[str, 'ConsumerDef'] = Field(default_factory=dict)
 
 class CrisisDef(BaseModel):
@@ -29,6 +29,11 @@ class DynamicTemplate(BaseModel):
     population_size: int = Field(100, ge=10)
     max_generations: int = Field(200, ge=1)
     emit_every_n: int = Field(5, ge=1)
+    mutation_rate: float = Field(0.1, ge=0.0, le=1.0)
+    mutation_strength: float = Field(0.1, ge=0.0, le=1.0)
+    crossover_rate: float = Field(1.0, ge=0.0, le=1.0)
+    elitism_count: int = Field(1, ge=1)
+    tournament_size: int = Field(2, ge=2)
 
 class ParetoScenario(BaseModel):
     scenario_id: str

@@ -7,7 +7,8 @@ def _evaluate_node(
     population: np.ndarray,
     mapping: List[Tuple[str, str]],
     parent_allocations: Dict[str, np.ndarray],
-    parent_path: str = ""
+    parent_path: str = "",
+    inherited_priority: float = 1.0
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
     """
     Returns:
@@ -26,6 +27,7 @@ def _evaluate_node(
     
     for c_name, consumer in consumers.items():
         current_path = f"{parent_path}.{c_name}" if parent_path else c_name
+        effective_priority = inherited_priority * consumer.priority_weight
         
         c_fitness = np.ones(pop_size)
         node_res_allocations = {}
@@ -42,12 +44,17 @@ def _evaluate_node(
                 level_allocations[r_name] = np.zeros(pop_size)
             level_allocations[r_name] += allocated
             
-        total_fitness += consumer.priority_weight * c_fitness
+        total_fitness += effective_priority * c_fitness
         
         # Evaluate children
         if consumer.subconsumers:
             child_fitness, child_penalty, child_viable, child_allocations = _evaluate_node(
-                consumer.subconsumers, population, mapping, node_res_allocations, current_path
+                consumer.subconsumers,
+                population,
+                mapping,
+                node_res_allocations,
+                current_path,
+                effective_priority
             )
             total_fitness += child_fitness
             total_penalty += child_penalty
@@ -109,7 +116,8 @@ def _get_objectives_node(
     consumers: Dict[str, ConsumerDef],
     population: np.ndarray,
     mapping: List[Tuple[str, str]],
-    parent_path: str = ""
+    parent_path: str = "",
+    inherited_priority: float = 1.0
 ) -> List[np.ndarray]:
     """Returns a list of objectives for consumers recursively."""
     pop_size = len(population)
@@ -117,6 +125,7 @@ def _get_objectives_node(
     
     for c_name, consumer in consumers.items():
         current_path = f"{parent_path}.{c_name}" if parent_path else c_name
+        effective_priority = inherited_priority * consumer.priority_weight
         
         c_fitness = np.ones(pop_size)
         for r_name, req in consumer.requirements.items():
@@ -126,10 +135,16 @@ def _get_objectives_node(
             coverage = np.minimum(1.0, allocated / req_val) if req_val > 0 else np.ones(pop_size)
             c_fitness *= coverage
             
-        objs.append(c_fitness)
+        objs.append(effective_priority * c_fitness)
         
         if consumer.subconsumers:
-            objs.extend(_get_objectives_node(consumer.subconsumers, population, mapping, current_path))
+            objs.extend(_get_objectives_node(
+                consumer.subconsumers,
+                population,
+                mapping,
+                current_path,
+                effective_priority
+            ))
             
     return objs
 

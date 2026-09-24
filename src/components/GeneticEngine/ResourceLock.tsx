@@ -1,10 +1,10 @@
 'use client';
 
-import { DynamicTemplate, ConsumerDef } from '@/types';
-import { useState, useRef } from 'react';
+import { ConsumerDef, DynamicTemplate } from '@/types';
+import { AnimatePresence, motion, MotionValue, useMotionValueEvent, useScroll, useSpring, useTransform } from 'framer-motion';
+import { Lock, Plus, Settings2, Trash2 } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { Modal } from '../ui/Modal';
-import { Trash2, Plus, Lock, Settings2 } from 'lucide-react';
-import { motion, AnimatePresence, useScroll, useTransform, useMotionValueEvent, useSpring, MotionValue } from 'framer-motion';
 
 const formatLabel = (key: string) => {
   return key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
@@ -196,7 +196,7 @@ export function ResourceLock({ template, onChange, disabled }: Props) {
 
   return (
     <>
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-full flex flex-col items-center">
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col items-center">
         <div className="text-center mb-6">
           <h2 className="text-xl font-semibold text-slate-800 flex items-center justify-center">
             Módulo de Recursos
