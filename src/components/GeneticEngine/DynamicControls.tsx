@@ -28,9 +28,11 @@ interface Props {
   disabled: boolean;
   allocations?: Record<string, number>;
   onFocusChange?: (path: string[]) => void;
+  focusPath: string[];
+  configuredPaths: string[];
 }
 
-export function DynamicControls({ template, onChange, disabled, allocations, onFocusChange }: Props) {
+export function DynamicControls({ template, onChange, disabled, allocations, onFocusChange, focusPath, configuredPaths }: Props) {
   const [localTemplate, setLocalTemplate] = useState<DynamicTemplate>(template);
 
   // Consumer Editing State
@@ -129,6 +131,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
     const newT = JSON.parse(JSON.stringify(localTemplate));
     const target = getConsumerByPath(newT.consumers, editingConsumerPath);
     target.requirements[rName].value = val;
+    target.requirements[rName].original_demand = val;
     updateTemplate(newT);
   };
 
@@ -167,7 +170,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
     const root: PreziNodeData = {
       id: 'root',
       title: 'Kinich-Agro',
-      subtitle: 'SimulaciÃ³n Global',
+      subtitle: 'Simulación Global',
       data: { path: [] },
       children: []
     };
@@ -177,23 +180,47 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
         const path = [...currentPath, cName];
         const subCount = Object.keys(cDef.subconsumers || {}).length;
         
+        const reqCount = Object.keys(cDef.requirements || {}).length;
+        const isUnlocked = path.length === 1 || reqCount > 0;
+        
+        // Is this node an immediate child of the currently focused path?
+        const isImmediateChild = path.length === focusPath.length + 1 && path.slice(0, focusPath.length).every((v, i) => v === focusPath[i]);
+        
         let allocStr = "";
-        if (allocations) {
+        if (allocations && isImmediateChild) {
+          // Preview allocation from genetic algorithm
           const resMap = Object.keys(cDef.requirements || {}).map(r => {
              const key = `${path.join('.')}.${r}`;
-             return `${translateToSpanish(r)}:${Math.round(allocations[key] || 0)}`;
+             const val = Math.round(allocations[key] || 0);
+             const demand = cDef.requirements![r].original_demand ?? cDef.requirements![r].value;
+             if (val < Math.round(demand)) {
+                 return `⚠️${translateToSpanish(r)}:${val}/${Math.round(demand)}`;
+             }
+             return `${translateToSpanish(r)}:${val}`;
           });
-          if (resMap.length > 0) allocStr = " | Asignado: " + resMap.join(', ');
+          if (resMap.length > 0) allocStr = " | Pre-Asignado: " + resMap.join(', ');
         } else {
-          const reqCount = Object.keys(cDef.requirements || {}).length;
-          allocStr = ` | ${reqCount} Reqs`;
+          // Show current actual requirements
+          const resMap = Object.keys(cDef.requirements || {}).map(r => {
+             const val = Math.round(cDef.requirements![r].value);
+             const demand = cDef.requirements![r].original_demand;
+             if (demand !== undefined && val < Math.round(demand)) {
+                 return `⚠️${translateToSpanish(r)}:${val}/${Math.round(demand)}`;
+             }
+             return `${translateToSpanish(r)}:${val}`;
+          });
+          if (resMap.length > 0) allocStr = " | Base: " + resMap.join(', ');
         }
+        
+        const pathStr = path.join('.');
+        const hasBaseSelected = configuredPaths.includes(pathStr);
 
         const node: PreziNodeData = {
-          id: path.join('.'),
+          id: pathStr,
           title: translateToSpanish(cName),
           subtitle: `${(cDef.priority_weight * 100).toFixed(0)}% Pri${allocStr}`,
-          data: { path }
+          data: { path, hasBaseSelected },
+          isUnlocked
         };
         if (subCount > 0) {
           node.children = traverse(cDef.subconsumers!, path);
@@ -382,7 +409,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
                         type="number"
                         min="0"
                         step="1"
-                        value={req.value}
+                        value={req.original_demand ?? req.value}
                         onChange={(e) => handleUpdateActiveReq(rName, parseFloat(e.target.value))}
                         className="flex-1 text-sm border border-slate-200 rounded px-2 py-1 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
                       />

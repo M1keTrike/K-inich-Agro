@@ -5,6 +5,7 @@ export interface ResourceDef {
 
 export interface RequirementDef {
   value: number;
+  original_demand?: number;
 }
 
 export interface ConsumerDef {

@@ -11,6 +11,7 @@ export interface PreziNodeData {
   subtitle?: string;
   children?: PreziNodeData[];
   data?: Record<string, unknown>;
+  isUnlocked?: boolean;
 }
 
 interface PreziViewerProps {
@@ -278,7 +279,9 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
                     ? 'w-24 h-24 bg-indigo-500 border-4 border-white shadow-indigo-500/50' 
                     : isParentOfActive
                       ? 'w-16 h-16 bg-slate-700 border-2 border-slate-500'
-                      : 'w-12 h-12 bg-slate-800 border-2 border-slate-600 group-hover:border-indigo-400 group-hover:scale-110'
+                      : node.data.isUnlocked
+                        ? 'w-14 h-14 bg-emerald-600 border-2 border-emerald-400 group-hover:border-emerald-300 group-hover:scale-110 shadow-[0_0_15px_rgba(52,211,153,0.5)]'
+                        : 'w-12 h-12 bg-slate-800 border-2 border-slate-600 group-hover:border-indigo-400 group-hover:scale-110 opacity-70'
                   }
                 `}
               >
@@ -290,6 +293,17 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
                 {/* Pulso para el activo */}
                 {isActive && (
                   <span className="absolute inset-0 rounded-full animate-ping bg-white opacity-20"></span>
+                )}
+                {/* Pulso de desbloqueo sutil para los nodos desbloqueados que no están activos */}
+                {!isActive && node.data.isUnlocked && !isParentOfActive && (
+                  <span className="absolute inset-0 rounded-full animate-pulse bg-emerald-400 opacity-20"></span>
+                )}
+                
+                {/* Etiqueta de Base Seleccionada */}
+                {node.data?.hasBaseSelected && (
+                  <div className="absolute -top-2 -right-2 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full border-2 border-slate-900 shadow-md z-10">
+                    ✓ BASE
+                  </div>
                 )}
               </div>
               
