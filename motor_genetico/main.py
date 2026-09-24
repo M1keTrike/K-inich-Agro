@@ -7,7 +7,7 @@ app = FastAPI(title="Motor Genético SSE", version="1.0.0")
 # CORS middleware for Vercel domains and localhost
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://*.vercel.app", "https://kinich-agro.vercel.app", "http://localhost:3000"],
+    allow_origins=["https://*.vercel.app", "https://kinich-agro.vercel.app", "https://itzamna.vercel.app", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -28,7 +28,7 @@ export async function explainScenarioWithLLM(scenario: Scenario): Promise<string
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'Kinich-Agro Dashboard'
+        'X-Title': 'Itzamná Dashboard'
       },
       body: JSON.stringify({
         model: 'google/gemini-pro',

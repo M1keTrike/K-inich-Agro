@@ -14,8 +14,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Itzamná | Gemmelo Digital de gobernanza comunitaria",
-  description: "Sistema de Gobernanza K'inich-Agro",
+  title: "Itzamná | Gemelo Digital de gobernanza comunitaria",
+  description: "Sistema de Gobernanza Itzamná",
 };
 
 export default function RootLayout({

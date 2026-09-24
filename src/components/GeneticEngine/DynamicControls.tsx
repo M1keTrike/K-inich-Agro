@@ -221,7 +221,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
     // We need a single root for the radial tree.
     const root: PreziNodeData = {
       id: 'root',
-      title: 'Kinich-Agro',
+      title: 'Itzamná',
       subtitle: 'Simulación Global',
       data: { path: [] },
       children: []
@@ -271,6 +271,7 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
           id: pathStr,
           title: translateToSpanish(cName),
           subtitle: `${(cDef.priority_weight * 100).toFixed(0)}% Pri${allocStr}`,
+          priority_weight: cDef.priority_weight,
           data: { path, hasBaseSelected },
           isUnlocked
         };
@@ -341,6 +342,14 @@ export function DynamicControls({ template, onChange, disabled, allocations, onF
                <PreziViewer 
                  data={buildPreziData(localTemplate.consumers)} 
                  onNodeClick={handleNodeClick}
+                 onPriorityChange={(nodeData, newWeight) => {
+                   if (nodeData.id === 'root' || !nodeData.data?.path) return;
+                   const path = nodeData.data.path as string[];
+                   const newT = JSON.parse(JSON.stringify(localTemplate));
+                   const target = getConsumerByPath(newT.consumers, path);
+                   target.priority_weight = newWeight;
+                   updateTemplate(newT);
+                 }}
                  onFocusChange={(nodeData) => {
                    if (onFocusChange && nodeData.data?.path) {
                      onFocusChange(nodeData.data.path as string[]);

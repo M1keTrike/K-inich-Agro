@@ -340,7 +340,6 @@ export default function Home() {
   // 3. Update template on the fly
   const handleTemplateChange = (newTemplate: DynamicTemplate) => {
     setActiveTemplate(newTemplate);
-    setCache({});
     setGlobalScenarios([]);
     setData(null);
     setHistory([]);
@@ -687,12 +686,10 @@ export default function Home() {
 
     // Mark as configured in cache if not already
     const currentPathKey = focusPath.join('.');
-    const isNew = !cache[currentPathKey];
-    if (isNew) {
-      setCache(prev => ({ ...prev, [currentPathKey]: scenario }));
-    }
+    setCache(prev => ({ ...prev, [currentPathKey]: scenario }));
 
-    handleTemplateChange(newTemplate);
+    setActiveTemplate(newTemplate);
+    setGlobalScenarios([]); // Invalidate global scenarios since a local change was made
     setData(null);
     setHistory([]);
   };
@@ -731,9 +728,12 @@ export default function Home() {
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
         <div className="max-w-[1600px] mx-auto px-6">
           <div className="py-2 flex flex-wrap items-center gap-x-8 gap-y-2">
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">K&apos;inich-Agro: Entornos Dinámicos</h1>
-              <p className="text-xs text-slate-500">Gobernanza Agnóstica · Generación {data ? data.generation : 0}</p>
+            <div className="flex items-center gap-3 min-w-0">
+              <img src="/icons/logo.png" alt="Itzamná Logo" className="w-10 h-10 object-contain rounded-md" />
+              <div>
+                <h1 className="text-lg font-bold text-slate-800 leading-tight">Itzamná: Entornos Dinámicos</h1>
+                <p className="text-xs text-slate-500">Gobernanza Agnóstica · Generación {data ? data.generation : 0}</p>
+              </div>
             </div>
 
             <div className="flex-1 min-w-[220px] max-w-md">

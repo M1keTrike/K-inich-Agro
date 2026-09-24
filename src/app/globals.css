@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Corporate light theme — K'inich-Gov */
+/* Corporate light theme — Itzamná-Gov */
 :root {
   --background: #f8fafc; /* slate-50 */
   --foreground: #1e293b; /* slate-800 */

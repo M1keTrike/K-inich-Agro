@@ -57,7 +57,7 @@ def extract_archetypes(
     last_label = mapping[-1][0].replace('_', ' ').title() if mapping else "Producción"
     labels = ["Prioridad " + first_label,
               "Prioridad " + last_label,
-              "Balance SistÃ©mico"]
+              "Balance Sistémico"]
 
     archetypes = []
     for i in range(3):

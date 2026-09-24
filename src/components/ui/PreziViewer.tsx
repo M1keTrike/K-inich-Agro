@@ -4,11 +4,13 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { hierarchy, tree, HierarchyPointNode } from 'd3-hierarchy';
 import { Home, ArrowLeft } from 'lucide-react';
+import { PriorityDial } from './PriorityDial';
 
 export interface PreziNodeData {
   id: string;
   title: string;
   subtitle?: string;
+  priority_weight?: number;
   children?: PreziNodeData[];
   data?: Record<string, unknown>;
   isUnlocked?: boolean;
@@ -18,6 +20,7 @@ interface PreziViewerProps {
   data: PreziNodeData;
   onNodeClick?: (node: PreziNodeData) => void;
   onFocusChange?: (node: PreziNodeData) => void;
+  onPriorityChange?: (node: PreziNodeData, newWeight: number) => void;
 }
 
 interface PointNode extends HierarchyPointNode<PreziNodeData> {
@@ -25,7 +28,7 @@ interface PointNode extends HierarchyPointNode<PreziNodeData> {
   cartesianY: number;
 }
 
-export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerProps) {
+export function PreziViewer({ data, onNodeClick, onFocusChange, onPriorityChange }: PreziViewerProps) {
   // Configuración de la cámara
   const [camera, setCamera] = useState({ x: 0, y: 0, scale: 1 });
   const [activeNodeId, setActiveNodeId] = useState<string>(data.id);
@@ -141,14 +144,14 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
   };
 
   // Panning
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return; // solo click izquierdo
     setIsFocused(true);
     setIsDragging(true);
     setLastPanPos({ x: e.clientX, y: e.clientY });
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
     const dx = e.clientX - lastPanPos.x;
     const dy = e.clientY - lastPanPos.y;
@@ -161,7 +164,7 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
     }));
   };
 
-  const handleMouseUp = () => setIsDragging(false);
+  const handlePointerUp = () => setIsDragging(false);
 
   return (
     <div 
@@ -169,10 +172,10 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
       className={`relative w-full h-[600px] bg-slate-950 overflow-hidden rounded-2xl flex items-center justify-center shadow-inner transition-all duration-300 ${
         isFocused ? 'ring-2 ring-indigo-500 ring-offset-2' : ''
       } ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerUp}
       style={{ backgroundImage: 'radial-gradient(circle at center, #1e293b 0%, #0f172a 100%)' }}
     >
       {/* Controles flotantes */}
@@ -271,6 +274,17 @@ export function PreziViewer({ data, onNodeClick, onFocusChange }: PreziViewerPro
                 if (onNodeClick) onNodeClick(node.data);
               }}
             >
+              {node.data.priority_weight !== undefined && (
+                <PriorityDial
+                  value={node.data.priority_weight}
+                  onChange={(val) => {
+                    if (onPriorityChange) onPriorityChange(node.data, val);
+                  }}
+                  size={isActive ? 120 : isParentOfActive ? 88 : node.data.isUnlocked ? 80 : 72}
+                  color={isActive ? '#818cf8' : '#f43f5e'}
+                  disabled={node.data.id === 'root'}
+                />
+              )}
               {/* Círculo del nodo */}
               <div 
                 className={`
