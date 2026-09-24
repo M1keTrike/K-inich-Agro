@@ -3,20 +3,26 @@ from typing import Dict, List
 
 class ResourceDef(BaseModel):
     value: float = Field(..., ge=0.0)
-    max: float = Field(..., ge=0.0)
 
 class RequirementDef(BaseModel):
     value: float = Field(..., ge=0.0)
-    max: float = Field(..., ge=0.0)
 
 class ConsumerDef(BaseModel):
-    requirements: Dict[str, RequirementDef]
+    requirements: Dict[str, RequirementDef] = Field(default_factory=dict)
     priority_weight: float = Field(..., ge=0.0)
+    subconsumers: Dict[str, 'ConsumerDef'] = Field(default_factory=dict)
+
+class CrisisDef(BaseModel):
+    name: str
+    description: str
+    intensity: float = Field(0.0, ge=0.0, le=1.0)
+    impact_resource: Dict[str, float] = Field(default_factory=dict) # e.g. "OXIGENO_L": -0.5 meaning -50% at full intensity
 
 class DynamicTemplate(BaseModel):
     template_id: str
     name: str
     description: str
+    crisis_factors: Dict[str, CrisisDef] = Field(default_factory=dict)
     resources: Dict[str, ResourceDef]
     consumers: Dict[str, ConsumerDef]
     
@@ -27,7 +33,7 @@ class DynamicTemplate(BaseModel):
 class ParetoScenario(BaseModel):
     scenario_id: str
     label: str
-    allocations: Dict[str, Dict[str, float]] 
+    allocations: Dict[str, float] # Changed to a single flat dict for simplicity or keep hierarchical
     fitness_score: float
     pareto_rank: int
 

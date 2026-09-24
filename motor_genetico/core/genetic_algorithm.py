@@ -1,14 +1,70 @@
 import numpy as np
 from typing import Tuple, List, Dict
-from .schemas import DynamicTemplate
+from .schemas import DynamicTemplate, ConsumerDef
+
+def _build_mapping_recursive(consumers: Dict[str, 'ConsumerDef'], parent_path: str = "") -> List[Tuple[str, str]]:
+    mapping = []
+    for c_name, consumer in consumers.items():
+        current_path = f"{parent_path}.{c_name}" if parent_path else c_name
+        for r_name in consumer.requirements.keys():
+            mapping.append((current_path, r_name))
+        mapping.extend(_build_mapping_recursive(consumer.subconsumers, current_path))
+    return mapping
 
 def build_gene_mapping(template: DynamicTemplate) -> List[Tuple[str, str]]:
-    """Returns a list of (consumer_name, resource_name) for each gene."""
-    mapping = []
-    for c_name, consumer in template.consumers.items():
-        for r_name in consumer.requirements.keys():
-            mapping.append((c_name, r_name))
-    return mapping
+    """Returns a list of (consumer_path, resource_name) for each gene."""
+    return _build_mapping_recursive(template.consumers)
+
+def decode_to_absolute(genes: np.ndarray, template: DynamicTemplate, mapping: List[Tuple[str, str]]) -> np.ndarray:
+    """Decodes proportional [0,1] genes into absolute allocations using top-down hierarchical distribution."""
+    pop_size = len(genes)
+    abs_pop = np.zeros_like(genes)
+    
+    # 1. Total available resources at root (accounting for crises)
+    resource_pools = {}
+    for r_name, r_def in template.resources.items():
+        base_val = r_def.value
+        total_impact = 0.0
+        if template.crisis_factors:
+            for crisis in template.crisis_factors.values():
+                if crisis.impact_resource and r_name in crisis.impact_resource:
+                    total_impact += crisis.intensity * crisis.impact_resource[r_name]
+        resource_pools[r_name] = np.full(pop_size, max(0.0, base_val * (1.0 + total_impact)))
+        
+    def distribute(consumers: Dict[str, ConsumerDef], pools: Dict[str, np.ndarray], parent_path: str = ""):
+        child_pools = {c_name: {} for c_name in consumers.keys()}
+        
+        for r_name, pool in pools.items():
+            children_req = [(c_name, c) for c_name, c in consumers.items() if c.requirements and r_name in c.requirements]
+            if not children_req: continue
+            
+            weights = []
+            gene_indices = []
+            for c_name, consumer in children_req:
+                path = f"{parent_path}.{c_name}" if parent_path else c_name
+                idx = mapping.index((path, r_name))
+                gene_indices.append(idx)
+                # Priority (0.0 to 1.0) dictates the weight of the request
+                weights.append(genes[:, idx] * consumer.priority_weight)
+                
+            weights = np.column_stack(weights)
+            sum_weights = np.sum(weights, axis=1)
+            # If sum > 1.0, scale down. If sum <= 1.0, they get the exact percentage they asked for.
+            norm_factor = np.maximum(1.0, sum_weights)
+            
+            for i, (c_name, consumer) in enumerate(children_req):
+                alloc = pool * (weights[:, i] / norm_factor)
+                abs_pop[:, gene_indices[i]] = alloc
+                child_pools[c_name][r_name] = alloc
+                
+        # Recurse to subconsumers
+        for c_name, consumer in consumers.items():
+            if consumer.subconsumers and child_pools[c_name]:
+                path = f"{parent_path}.{c_name}" if parent_path else c_name
+                distribute(consumer.subconsumers, child_pools[c_name], path)
+                
+    distribute(template.consumers, resource_pools)
+    return abs_pop
 
 class GeneticAlgorithm:
     def __init__(self, template: DynamicTemplate):
@@ -20,16 +76,17 @@ class GeneticAlgorithm:
         self.fitness = np.zeros(self.pop_size)
         self.generation = 0
 
-    def initialize_population(self):
+    def _evaluate(self, pop: np.ndarray):
         from .fitness import evaluate_population
-        # Initialize each gene uniformly between 0 and resource max
-        for i, (c_name, r_name) in enumerate(self.mapping):
-            max_val = self.template.resources[r_name].value
-            self.population[:, i] = np.random.uniform(0, max_val, self.pop_size)
-        self.fitness, self.viable_mask = evaluate_population(self.population, self.template, self.mapping)
+        abs_pop = decode_to_absolute(pop, self.template, self.mapping)
+        return evaluate_population(abs_pop, self.template, self.mapping)
+
+    def initialize_population(self):
+        # Genes represent proportional allocation (0.0 to 1.0)
+        self.population = np.random.uniform(0.0, 1.0, (self.pop_size, self.num_genes))
+        self.fitness, self.viable_mask = self._evaluate(self.population)
 
     def evolve_one_generation(self):
-        from .fitness import evaluate_population
         new_population = np.zeros_like(self.population)
         
         # Elitism
@@ -45,7 +102,7 @@ class GeneticAlgorithm:
             new_population[i] = child
             
         self.population = new_population
-        self.fitness, self.viable_mask = evaluate_population(self.population, self.template, self.mapping)
+        self.fitness, self.viable_mask = self._evaluate(self.population)
         self.generation += 1
 
     def _tournament_select(self, k=2) -> int:
@@ -59,11 +116,9 @@ class GeneticAlgorithm:
     def _mutate(self, ind: np.ndarray) -> np.ndarray:
         prob = 0.1
         if np.random.random() < prob:
-            for i, (c_name, r_name) in enumerate(self.mapping):
-                max_val = self.template.resources[r_name].value
-                sigma = 0.05 * max_val if max_val > 0 else 1.0
-                ind[i] += np.random.normal(0, sigma)
-                ind[i] = np.clip(ind[i], 0, max_val)
+            # Mutate proportional genes slightly
+            ind += np.random.normal(0, 0.1, self.num_genes)
+            ind = np.clip(ind, 0.0, 1.0)
         return ind
 
     def get_avg_fitness(self) -> float:

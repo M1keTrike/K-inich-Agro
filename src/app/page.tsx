@@ -1,8 +1,10 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { ConvergenceChart } from '@/components/GeneticEngine/ConvergenceChart';
+import { ResourceLock } from '@/components/GeneticEngine/ResourceLock';
 import { DynamicControls } from '@/components/GeneticEngine/DynamicControls';
-import { DynamicTemplate, EvolutionEvent } from '@/types';
+import { AlertBanner } from '@/components/ui/AlertBanner';
+import { DynamicTemplate, EvolutionEvent, ParetoScenario } from '@/types';
 
 // Formateador simple para convertir llaves como WATER_LITERS a español "Water Liters"
 const formatLabel = (key: string) => {
@@ -35,11 +37,11 @@ const translateToSpanish = (key: string) => {
 };
 
 export default function Home() {
-  const [templates, setTemplates] = useState<DynamicTemplate[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<DynamicTemplate | null>(null);
   
   const [data, setData] = useState<EvolutionEvent | null>(null);
   const [history, setHistory] = useState<EvolutionEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
   
   const eventSourceRef = useRef<EventSource | null>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -49,7 +51,6 @@ export default function Home() {
     fetch('http://localhost:8000/api/scenarios/templates')
       .then(res => res.json())
       .then((d: DynamicTemplate[]) => {
-        setTemplates(d);
         if (d.length > 0) {
           handleInject(d[0]);
         }
@@ -94,32 +95,132 @@ export default function Home() {
     eventSourceRef.current = eventSource;
   };
 
-  // 3. Inject new template
-  const handleInject = (template: DynamicTemplate) => {
-    setActiveTemplate(template);
-    fetch('http://localhost:8000/api/scenarios/active', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(template)
-    }).then(() => {
-      connectSSE();
-    }).catch(console.error);
+  const [focusPath, setFocusPath] = useState<string[]>([]);
+
+  const getSubTemplate = (template: DynamicTemplate, path: string[]): DynamicTemplate => {
+    if (!path || path.length === 0) return template;
+    
+    let currentConsumer = template.consumers[path[0]];
+    if (!currentConsumer) return template;
+    for (let i = 1; i < path.length; i++) {
+      if (!currentConsumer.subconsumers) return template;
+      currentConsumer = currentConsumer.subconsumers[path[i]];
+      if (!currentConsumer) return template;
+    }
+    
+    // Si queremos aislarlo de forma segura, asignamos sus requerimientos como recursos disponibles
+    const subResources: Record<string, import('@/types').ResourceDef> = {};
+    for (const [reqName, reqDef] of Object.entries(currentConsumer.requirements || {})) {
+      subResources[reqName] = { value: reqDef.value, max: reqDef.value }; 
+    }
+    
+    return {
+      ...template,
+      resources: subResources,
+      consumers: currentConsumer.subconsumers || {}
+    };
   };
 
-  // 4. Update template on the fly
-  const handleTemplateChange = (newTemplate: DynamicTemplate) => {
-    setActiveTemplate(newTemplate);
+  const executeGA = (template: DynamicTemplate, path: string[]) => {
+    const targetTemplate = getSubTemplate(template, path);
     
+    // Clear any previous error
+    setError(null);
+
+    // If there are no consumers in the sub-template, there's nothing to optimize
+    if (Object.keys(targetTemplate.consumers).length === 0) {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+      setData(null);
+      setHistory([]);
+      return;
+    }
+
+    // Check if we are trying to distribute resources for a child but the parent has no resources allocated (no requirements defined)
+    if (path.length > 0 && Object.keys(targetTemplate.resources).length === 0) {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+      setData(null);
+      setHistory([]);
+      setError("No se puede iniciar una repartición del hijo cuando aún no se tiene repartido un recurso del padre directo.");
+      return;
+    }
+
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       fetch('http://localhost:8000/api/scenarios/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newTemplate)
+        body: JSON.stringify(targetTemplate)
       }).then(() => {
-        connectSSE(); // Restart evolution with new params
+        connectSSE(); // Restart evolution with isolated scope
       }).catch(console.error);
     }, 500); // 500ms debounce
+  };
+
+  // 3. Inject new template
+  const handleInject = (template: DynamicTemplate) => {
+    setActiveTemplate(template);
+    executeGA(template, focusPath);
+  };
+
+  // 4. Update template on the fly
+  const handleTemplateChange = (newTemplate: DynamicTemplate) => {
+    setActiveTemplate(newTemplate);
+    executeGA(newTemplate, focusPath);
+  };
+
+  const handleFocusChange = (path: string[]) => {
+    setFocusPath(path);
+    if (activeTemplate) {
+      executeGA(activeTemplate, path);
+    }
+  };
+
+  const handleSelectScenario = (scenario: ParetoScenario) => {
+    if (!activeTemplate) return;
+    
+    // Create a deep copy of the template
+    const newTemplate = JSON.parse(JSON.stringify(activeTemplate)) as DynamicTemplate;
+    
+    // Navigate to the current focus node's subconsumers
+    let currentConsumers = newTemplate.consumers;
+    if (focusPath.length > 0) {
+      let current = newTemplate.consumers[focusPath[0]];
+      for (let i = 1; i < focusPath.length; i++) {
+        if (!current.subconsumers) current.subconsumers = {};
+        current = current.subconsumers[focusPath[i]];
+      }
+      if (!current.subconsumers) current.subconsumers = {};
+      currentConsumers = current.subconsumers;
+    }
+    
+    // Apply allocations as requirements for the children
+    for (const [key, val] of Object.entries(scenario.allocations)) {
+      // key might be "HABITAT.WATER" or "HABITAT.SUB.WATER"
+      const parts = key.split('.');
+      if (parts.length >= 2) {
+        const resourceName = parts.pop()!;
+        
+        let targetConsumer = currentConsumers;
+        let valid = true;
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (targetConsumer[parts[i]] && targetConsumer[parts[i]].subconsumers) {
+             targetConsumer = targetConsumer[parts[i]].subconsumers!;
+          } else {
+             valid = false;
+             break;
+          }
+        }
+        
+        if (valid) {
+           const finalConsumerName = parts[parts.length - 1];
+           if (targetConsumer[finalConsumerName] && targetConsumer[finalConsumerName].requirements[resourceName]) {
+               targetConsumer[finalConsumerName].requirements[resourceName].value = val;
+           }
+        }
+      }
+    }
+    
+    handleTemplateChange(newTemplate);
   };
 
   useEffect(() => {
@@ -145,96 +246,98 @@ export default function Home() {
           <p className="text-sm text-slate-500 mt-1">Gobernanza Agnóstica - Generación: {data ? data.generation : 0}</p>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          {/* Selector de Plantillas */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h2 className="text-xl font-semibold mb-4 text-slate-800">Inyectar Crisis</h2>
-            <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-              {templates.map(t => (
-                <div key={t.template_id} className={`p-4 border rounded-lg flex justify-between items-center transition ${activeTemplate.template_id === t.template_id ? 'bg-indigo-50 border-indigo-300' : 'bg-slate-50 border-slate-200'}`}>
-                  <div>
-                    <h3 className="font-medium text-slate-800">{t.name}</h3>
-                    <p className="text-xs text-slate-500">{t.description}</p>
-                  </div>
-                  <button 
-                    onClick={() => handleInject(t)}
-                    className="ml-4 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-md hover:bg-indigo-700 transition"
-                  >
-                    Inyectar
-                  </button>
-                </div>
-              ))}
-            </div>
+        {error && (
+          <div className="mb-6">
+            <AlertBanner 
+              crisisId="restriction-error" 
+              title="Restricción de Jerarquía" 
+              description={error} 
+              severity="warning" 
+              onDismiss={() => setError(null)} 
+            />
+          </div>
+        )}
+
+        {/* DASHBOARD: Vista de Resultados y Monitor */}
+        
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 mb-8">
+          {/* Módulo de Recursos (Columna Izquierda) */}
+          <div className="xl:col-span-1">
+            <ResourceLock 
+              template={activeTemplate} 
+              onChange={handleTemplateChange} 
+              disabled={false} 
+            />
           </div>
 
-          {/* Indicadores Dinámicos */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h2 className="text-xl font-semibold mb-4 text-slate-800">Estado de Recursos</h2>
-            <div className="space-y-4">
-              {Object.entries(activeTemplate.resources).map(([key, rDef]) => (
-                <div key={key}>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-sm font-medium text-slate-700">{translateToSpanish(key)}</span>
-                    <span className="text-sm text-slate-500">{rDef.value.toFixed(1)} / {rDef.max.toFixed(1)}</span>
+          {/* Mejores Soluciones (Pareto) */}
+          <div className="xl:col-span-2 bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Mejores Soluciones Genéticas (Pareto)</h3>
+            {data && data.top3 && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {data.top3.map((sc, idx) => (
+                  <div key={idx} className="p-4 border border-indigo-100 bg-indigo-50/40 rounded-xl">
+                    <h3 className="font-semibold text-indigo-900 mb-1">{sc.label}</h3>
+                    {sc.scenario_id === "unavailable" ? (
+                      <p className="text-sm text-slate-500 italic">Buscando soluciones viables...</p>
+                    ) : (
+                      <div className="flex flex-col h-full">
+                        <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-600 mb-3">Fitness: {sc.fitness_score.toFixed(3)}</p>
+                        <div className="bg-white p-3 rounded-lg border border-indigo-50 max-h-56 overflow-y-auto space-y-2 flex-grow mb-3">
+                          {Object.entries(sc.allocations).map(([pathStr, val]) => {
+                            const parts = pathStr.split('.');
+                            const rName = parts.pop()!;
+                            const consumerPath = parts.map(p => translateToSpanish(p)).join(' → ');
+                            
+                            return (
+                              <div key={pathStr} className="text-xs flex justify-between border-b border-slate-50 pb-1">
+                                <span className="text-slate-500 truncate pr-2" title={`${consumerPath}: ${translateToSpanish(rName)}`}>
+                                  <span className="font-medium text-slate-700">{consumerPath}</span> | {translateToSpanish(rName)}
+                                </span>
+                                <span className="font-bold text-slate-800">{val.toFixed(0)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {data?.is_final && (
+                          <button 
+                            onClick={() => handleSelectScenario(sc)}
+                            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+                          >
+                            Usar como Base
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2.5">
-                    <div 
-                      className="bg-emerald-500 h-2.5 rounded-full" 
-                      style={{ width: `${Math.min(100, Math.max(0, (rDef.value / rDef.max) * 100))}%` }}
-                    ></div>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="xl:col-span-1 bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Convergencia Evolutiva</h3>
+            <div className="h-64">
+              <ConvergenceChart data={history} />
             </div>
           </div>
         </div>
-        
-        {/* Controles Dinámicos */}
+
+        {/* PANEL DE CONTROL: Edición y Configuración */}
         <DynamicControls 
           template={activeTemplate} 
           onChange={handleTemplateChange} 
           disabled={false} 
+          allocations={(() => {
+            if (!data?.top3?.[0]?.allocations) return undefined;
+            const globalAllocations: Record<string, number> = {};
+            const prefix = focusPath.length > 0 ? focusPath.join('.') + '.' : '';
+            for (const [key, val] of Object.entries(data.top3[0].allocations)) {
+              globalAllocations[prefix + key] = val;
+            }
+            return globalAllocations;
+          })()}
+          onFocusChange={handleFocusChange}
         />
-
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-slate-800">Convergencia Genética (Fitness)</h3>
-          </div>
-          <ConvergenceChart data={history} />
-        </div>
-
-        {/* Proyecciones Pareto */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <h2 className="text-xl font-semibold mb-4 text-slate-800">Mejores soluciones</h2>
-          
-          {data && data.top3 && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              {data.top3.map((sc, idx) => (
-                <div key={idx} className="p-4 border border-indigo-100 bg-indigo-50/30 rounded-lg">
-                  <h3 className="font-semibold text-indigo-900 mb-2">{sc.label}</h3>
-                  {sc.scenario_id === "unavailable" ? (
-                    <p className="text-sm text-slate-500 italic">No disponible en esta generación.</p>
-                  ) : (
-                    <div>
-                      <p className="text-xs text-indigo-700 mb-2 font-medium">Fitness Score: {sc.fitness_score.toFixed(3)}</p>
-                      {Object.entries(sc.allocations).map(([cName, resAlloc]) => (
-                        <div key={cName} className="mb-2 bg-white/60 p-2 rounded border border-indigo-50">
-                          <p className="text-xs font-semibold text-slate-800 border-b border-indigo-100 pb-1 mb-1">{translateToSpanish(cName)}</p>
-                          {Object.entries(resAlloc).map(([rName, val]) => (
-                            <div key={rName} className="flex justify-between text-xs text-slate-600">
-                              <span>{translateToSpanish(rName)}:</span>
-                              <span className="font-medium">{val.toFixed(1)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
